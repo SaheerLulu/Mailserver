@@ -49,6 +49,11 @@ GREYLIST_DELAY_SECONDS = int(os.environ.get("GREYLIST_DELAY_SECONDS", "60"))
 CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "")
 CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", "3310"))
 
+# Web Push (VAPID). Generate keys with:  manage.py vapidkeys
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:postmaster@example.com")
+
 # --- Applications -----------------------------------------------------------
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -134,6 +139,15 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", BASE_DIR / "media"))
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --- Optional Redis (shared cache + sessions for horizontal scaling) --------
+# Set REDIS_URL (e.g. redis://redis:6379/0) to share cache/session state across
+# multiple web replicas. Without it, falls back to per-process local memory.
+REDIS_URL = os.environ.get("REDIS_URL", "")
+if REDIS_URL:
+    CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache",
+                          "LOCATION": REDIS_URL}}
+    SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 
 # --- Security (enabled when not in DEBUG) -----------------------------------
 if not DEBUG:

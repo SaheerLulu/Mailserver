@@ -1,7 +1,9 @@
 """aiosmtpd handler + authenticator bridging SMTP to the Django ORM."""
+import base64
 import logging
 
-from aiosmtpd.smtp import AuthResult, LoginPassword
+from aiosmtpd.controller import Controller
+from aiosmtpd.smtp import SMTP, AuthResult, LoginPassword, MISSING, auth_mechanism
 from asgiref.sync import sync_to_async
 from django.conf import settings
 
@@ -68,3 +70,36 @@ class Authenticator:
             return AuthResult(success=False)
         session.auth_login = mailbox.email
         return AuthResult(success=True)
+
+
+class MailSMTP(SMTP):
+    """SMTP server class that adds the XOAUTH2 mechanism (OAuth bearer tokens).
+
+    LOGIN/PLAIN are still handled by the Authenticator; XOAUTH2 validates an
+    ApiToken. Relies on DJANGO_ALLOW_ASYNC_UNSAFE (set by the runsmtp command).
+    """
+
+    @auth_mechanism("XOAUTH2")
+    async def auth_XOAUTH2(self, _server, args):
+        from mail import oauth
+        if len(args) == 1:
+            blob = await self.challenge_auth("")
+            if blob is MISSING:
+                return AuthResult(success=False)
+        else:
+            try:
+                blob = base64.b64decode(args[1].encode(), validate=True)
+            except Exception:  # noqa: BLE001
+                return AuthResult(success=False, handled=False)
+        mailbox = oauth.xoauth2_validate(blob.decode("utf-8", "replace"))
+        if mailbox is None:
+            return AuthResult(success=False)
+        self.session.auth_login = mailbox.email
+        return AuthResult(success=True, auth_data=mailbox.email)
+
+
+class XOAuthController(Controller):
+    """Controller that serves connections with the XOAUTH2-capable SMTP class."""
+
+    def factory(self):
+        return MailSMTP(self.handler, **self.SMTP_kwargs)

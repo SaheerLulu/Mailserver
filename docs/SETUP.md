@@ -94,6 +94,15 @@ Work through [DNS.md](DNS.md): **A/AAAA, PTR, MX, SPF, DKIM** (from step 5),
 
 - **REST API:** mint a token with `manage.py apitoken you@example.com` and call
   `/api/...` with `Authorization: Bearer <token>` (see the README).
+- **Contacts/Calendar sync (CalDAV/CardDAV):** point a DAV client at
+  `https://mail.example.com/dav/<email>/addressbook/` and
+  `.../calendars/default/` using the mailbox email + password
+  (autodiscovery via `/.well-known/carddav` and `/.well-known/caldav`).
+- **OAuth2 / XOAUTH2:** `POST /oauth/token` (password grant) returns a token
+  usable as `Authorization: Bearer …` or as the XOAUTH2 credential for IMAP/SMTP.
+- **Web Push:** run `manage.py vapidkeys`, put the keys in `.env`, and the
+  webmail will offer browser notifications (needs HTTPS).
+- **Scaling / HA:** see [SCALING.md](SCALING.md).
 
 ## Day-2
 

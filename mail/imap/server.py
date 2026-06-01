@@ -117,6 +117,8 @@ class IMAPConnection:
             return False
         elif cmd == "LOGIN":
             await self.cmd_login(tag, rest)
+        elif cmd == "AUTHENTICATE":
+            await self.cmd_authenticate(tag, rest)
         elif cmd in ("LIST", "LSUB"):
             await self.cmd_list(tag)
         elif cmd in ("SELECT", "EXAMINE"):
@@ -162,6 +164,50 @@ class IMAPConnection:
             return
         self.mailbox = mailbox
         await self.send(f"{tag} OK LOGIN completed")
+
+    async def cmd_authenticate(self, tag, rest):
+        import base64
+
+        from mail import oauth
+        toks = rest.split()
+        mech = (toks[0].upper() if toks else "")
+        initial = toks[1] if len(toks) > 1 else None
+
+        if mech == "XOAUTH2":
+            if initial is None:
+                self._w(b"+ \r\n")
+                await self._flush()
+                line = (await self.reader.readline()).decode().strip()
+            else:
+                line = initial
+            mailbox = await sync_to_async(oauth.xoauth2_from_b64)(line)
+            if mailbox is None:
+                # client must send an empty line to finish a failed exchange
+                self._w(b"+ \r\n")
+                await self._flush()
+                await self.reader.readline()
+                await self.send(f"{tag} NO [AUTHENTICATIONFAILED] invalid token")
+                return
+            self.mailbox = mailbox
+            await self.send(f"{tag} OK AUTHENTICATE completed")
+        elif mech == "PLAIN":
+            if initial is None:
+                self._w(b"+ \r\n")
+                await self._flush()
+                initial = (await self.reader.readline()).decode().strip()
+            try:
+                _authzid, user, pw = base64.b64decode(initial).decode().split("\x00", 2)
+            except Exception:  # noqa: BLE001
+                await self.send(f"{tag} NO invalid PLAIN response")
+                return
+            mailbox = await sync_to_async(backend.authenticate)(user, pw)
+            if mailbox is None:
+                await self.send(f"{tag} NO [AUTHENTICATIONFAILED] invalid credentials")
+                return
+            self.mailbox = mailbox
+            await self.send(f"{tag} OK AUTHENTICATE completed")
+        else:
+            await self.send(f"{tag} NO unsupported mechanism")
 
     async def cmd_list(self, tag):
         if not self._require_login(tag):

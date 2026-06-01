@@ -3,7 +3,7 @@ import logging
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Q
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -232,6 +232,88 @@ def contacts_view(request):
         return redirect("contacts")
     return render(request, "mail/contacts.html",
                   {"contacts": request.user.contacts.all(), **_sidebar(request.user)})
+
+
+@login_required
+def calendar_view(request):
+    from datetime import datetime
+    from django.utils import timezone as tz
+    from .models import Calendar, Event
+    cal, _ = Calendar.objects.get_or_create(mailbox=request.user, slug="default")
+
+    if request.method == "POST" and request.POST.get("delete"):
+        Event.objects.filter(calendar=cal, pk=request.POST["delete"]).delete()
+        return redirect("calendar")
+    if request.method == "POST":
+        import uuid
+        summary = request.POST.get("summary", "").strip()
+
+        def _parse(name, default=None):
+            val = request.POST.get(name)
+            if not val:
+                return default
+            try:
+                return tz.make_aware(datetime.fromisoformat(val))
+            except ValueError:
+                return default
+        start = _parse("dtstart")
+        if summary and start:
+            Event.objects.create(
+                calendar=cal, uid=str(uuid.uuid4()), summary=summary,
+                dtstart=start, dtend=_parse("dtend"),
+                all_day=bool(request.POST.get("all_day")),
+                location=request.POST.get("location", ""),
+                description=request.POST.get("description", ""))
+            messages.success(request, "Event added.")
+        return redirect("calendar")
+
+    from datetime import timedelta
+    upcoming = cal.events.filter(dtstart__gte=tz.now() - timedelta(days=1))
+    past = cal.events.filter(dtstart__lt=tz.now()).order_by("-dtstart")[:20]
+    return render(request, "mail/calendar.html",
+                  {"calendar": cal, "upcoming": upcoming, "past": past,
+                   "caldav_url": f"/dav/{request.user.email}/calendars/default/",
+                   **_sidebar(request.user)})
+
+
+# --- Web Push -------------------------------------------------------------
+def vapid_public_key(request):
+    from django.conf import settings as s
+    return JsonResponse({"publicKey": s.VAPID_PUBLIC_KEY})
+
+
+@login_required
+@require_POST
+def push_subscribe(request):
+    import json
+    from .models import PushSubscription
+    try:
+        data = json.loads(request.body)
+        keys = data["keys"]
+        PushSubscription.objects.update_or_create(
+            endpoint=data["endpoint"],
+            defaults={"mailbox": request.user, "p256dh": keys["p256dh"],
+                      "auth": keys["auth"]})
+    except (KeyError, ValueError):
+        return JsonResponse({"error": "bad subscription"}, status=400)
+    return JsonResponse({"status": "subscribed"})
+
+
+def service_worker(request):
+    """Served at /sw.js so it controls the whole origin scope."""
+    js = """
+self.addEventListener('push', function(event) {
+  var data = {};
+  try { data = event.data.json(); } catch (e) {}
+  event.waitUntil(self.registration.showNotification(
+    data.title || 'New mail', {body: data.body || '', tag: 'mail-' + (data.id || '')}));
+});
+self.addEventListener('notificationclick', function(event) {
+  event.notification.close();
+  event.waitUntil(clients.openWindow('/'));
+});
+"""
+    return HttpResponse(js, content_type="application/javascript")
 
 
 @login_required

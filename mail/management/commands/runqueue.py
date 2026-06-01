@@ -4,6 +4,7 @@ import threading
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand
+from django.db import connection, transaction
 from django.utils import timezone
 
 from mail import delivery
@@ -41,9 +42,18 @@ class Command(BaseCommand):
 
     def _drain(self, batch: int) -> int:
         now = timezone.now()
-        due = OutboundMessage.objects.filter(
-            status=OutboundMessage.Status.QUEUED, next_attempt__lte=now
-        )[:batch]
+        # Claim a batch atomically so multiple queue workers can run in
+        # parallel (HA) without delivering the same message twice.
+        with transaction.atomic():
+            qs = (OutboundMessage.objects
+                  .filter(status=OutboundMessage.Status.QUEUED, next_attempt__lte=now)
+                  .order_by("next_attempt"))
+            if connection.features.has_select_for_update_skip_locked:
+                qs = qs.select_for_update(skip_locked=True)
+            claimed = list(qs[:batch].values_list("id", flat=True))
+            OutboundMessage.objects.filter(id__in=claimed).update(
+                next_attempt=now + timedelta(hours=1))  # lease while we work
+        due = OutboundMessage.objects.filter(id__in=claimed)
 
         count = 0
         for om in due:

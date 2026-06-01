@@ -18,7 +18,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         from aiosmtpd.controller import Controller
 
-        from mail.smtp.handler import Authenticator, MailHandler
+        from mail.smtp.handler import Authenticator, MailHandler, XOAuthController
 
         handler = MailHandler()
 
@@ -37,7 +37,7 @@ class Command(BaseCommand):
             data_size_limit=settings.MAX_MESSAGE_SIZE,
             tls_context=tls_context,
         )
-        submission = Controller(
+        submission = XOAuthController(
             handler,
             hostname="0.0.0.0",
             port=settings.SMTP_SUBMISSION_PORT,

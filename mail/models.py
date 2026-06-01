@@ -55,6 +55,9 @@ class Mailbox(AbstractBaseUser, PermissionsMixin):
                                         default="Out of office")
     vacation_message = models.TextField(blank=True)
 
+    # Notify this URL (POST JSON) when new mail arrives.
+    webhook_url = models.URLField(blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = MailboxManager()
@@ -263,21 +266,33 @@ class OutboundMessage(models.Model):
 
 
 class Contact(models.Model):
-    """A personal address-book entry, owned by one mailbox."""
+    """A personal address-book entry, owned by one mailbox (also a CardDAV card)."""
     mailbox = models.ForeignKey(Mailbox, on_delete=models.CASCADE, related_name="contacts")
+    uid = models.CharField(max_length=255, blank=True, db_index=True)
     name = models.CharField(max_length=255, blank=True)
     email = models.EmailField()
     organization = models.CharField(max_length=255, blank=True)
     phone = models.CharField(max_length=64, blank=True)
     notes = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ("mailbox", "email")
         ordering = ["name", "email"]
 
+    def save(self, *args, **kwargs):
+        if not self.uid:
+            import uuid
+            self.uid = str(uuid.uuid4())
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.name} <{self.email}>" if self.name else self.email
+
+    @property
+    def etag(self) -> str:
+        return f'"{int(self.updated_at.timestamp())}"'
 
 
 class ApiToken(models.Model):
@@ -333,3 +348,58 @@ class GreylistEntry(models.Model):
 
     def __str__(self):
         return f"{self.key} ({'accepted' if self.accepted else 'pending'})"
+
+
+class Calendar(models.Model):
+    """A CalDAV calendar collection owned by one mailbox."""
+    mailbox = models.ForeignKey(Mailbox, on_delete=models.CASCADE, related_name="calendars")
+    slug = models.SlugField(max_length=64, default="default")
+    name = models.CharField(max_length=128, default="Calendar")
+    color = models.CharField(max_length=7, default="#2563eb")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("mailbox", "slug")
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.mailbox_id})"
+
+
+class Event(models.Model):
+    """A VEVENT inside a calendar (CalDAV resource / webmail calendar entry)."""
+    calendar = models.ForeignKey(Calendar, on_delete=models.CASCADE, related_name="events")
+    uid = models.CharField(max_length=255, db_index=True)
+    summary = models.CharField(max_length=512, blank=True)
+    description = models.TextField(blank=True)
+    location = models.CharField(max_length=512, blank=True)
+    dtstart = models.DateTimeField()
+    dtend = models.DateTimeField(null=True, blank=True)
+    all_day = models.BooleanField(default=False)
+    rrule = models.CharField(max_length=512, blank=True)
+    sequence = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("calendar", "uid")
+        ordering = ["dtstart"]
+
+    def __str__(self):
+        return self.summary or self.uid
+
+    @property
+    def etag(self) -> str:
+        return f'"{int(self.updated_at.timestamp())}-{self.sequence}"'
+
+
+class PushSubscription(models.Model):
+    """A Web Push (VAPID) subscription registered by a browser/mobile client."""
+    mailbox = models.ForeignKey(Mailbox, on_delete=models.CASCADE, related_name="push_subs")
+    endpoint = models.URLField(max_length=500, unique=True)
+    p256dh = models.CharField(max_length=255)
+    auth = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"push:{self.mailbox_id}"

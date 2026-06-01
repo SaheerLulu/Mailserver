@@ -6,4 +6,6 @@ dnspython>=2.6
 cryptography>=42.0
 gunicorn>=22.0
 whitenoise>=6.6
+pywebpush>=2.0
+redis>=5.0
 

@@ -1,7 +1,7 @@
 from django.contrib.auth.views import LoginView, LogoutView
-from django.urls import path
+from django.urls import path, re_path
 
-from . import api, views
+from . import api, dav, oauth, views
 
 urlpatterns = [
     path("", views.mailbox_view, {"folder": "INBOX"}, name="mailbox"),
@@ -11,6 +11,7 @@ urlpatterns = [
     path("labels/create/", views.label_create, name="label_create"),
     path("compose/", views.compose_view, name="compose"),
     path("contacts/", views.contacts_view, name="contacts"),
+    path("calendar/", views.calendar_view, name="calendar"),
     path("settings/", views.settings_view, name="settings"),
     path("message/<int:pk>/", views.message_view, name="message"),
     path("message/<int:pk>/action/", views.message_action, name="message_action"),
@@ -19,6 +20,11 @@ urlpatterns = [
     path("login/", LoginView.as_view(template_name="mail/login.html"), name="login"),
     path("logout/", LogoutView.as_view(), name="logout"),
 
+    # --- Web Push ---
+    path("sw.js", views.service_worker, name="service_worker"),
+    path("push/vapid-public-key/", views.vapid_public_key, name="vapid_key"),
+    path("push/subscribe/", views.push_subscribe, name="push_subscribe"),
+
     # --- REST API ---
     path("api/folders/", api.folders),
     path("api/messages/", api.messages),
@@ -26,4 +32,12 @@ urlpatterns = [
     path("api/messages/<int:pk>/action/", api.message_action),
     path("api/send/", api.send),
     path("api/contacts/", api.contacts),
+
+    # --- OAuth2 ---
+    path("oauth/token", oauth.token, name="oauth_token"),
+
+    # --- CalDAV / CardDAV ---
+    path(".well-known/carddav", dav.dav),
+    path(".well-known/caldav", dav.dav),
+    re_path(r"^dav/?(?P<path>.*)$", dav.dav, name="dav"),
 ]

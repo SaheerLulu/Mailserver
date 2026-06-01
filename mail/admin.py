@@ -3,9 +3,9 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import BaseUserCreationForm, UserChangeForm
 
-from .models import (Alias, ApiToken, Attachment, Contact, Domain, Filter,
-                     GreylistEntry, Label, Mailbox, Message, OutboundMessage,
-                     SpamCorpus, SpamToken)
+from .models import (Alias, ApiToken, Attachment, Calendar, Contact, Domain,
+                     Event, Filter, GreylistEntry, Label, Mailbox, Message,
+                     OutboundMessage, PushSubscription, SpamCorpus, SpamToken)
 
 
 class MailboxCreationForm(BaseUserCreationForm):
@@ -144,3 +144,23 @@ class SpamCorpusAdmin(admin.ModelAdmin):
 class GreylistAdmin(admin.ModelAdmin):
     list_display = ("key", "accepted", "attempts", "first_seen", "last_seen")
     list_filter = ("accepted",)
+
+
+@admin.register(Calendar)
+class CalendarAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "mailbox")
+    list_filter = ("mailbox",)
+
+
+@admin.register(Event)
+class EventAdmin(admin.ModelAdmin):
+    list_display = ("summary", "calendar", "dtstart", "dtend", "all_day")
+    list_filter = ("calendar", "all_day")
+    search_fields = ("summary", "location", "uid")
+    date_hierarchy = "dtstart"
+
+
+@admin.register(PushSubscription)
+class PushSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ("mailbox", "endpoint", "created_at")
+    list_filter = ("mailbox",)

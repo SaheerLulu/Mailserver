@@ -186,6 +186,9 @@ def handle_inbound(rcpt_tos, raw: bytes, peer_ip="", mail_from="", helo="") -> i
                 delivered += 1
                 if not msg.is_spam:
                     _maybe_autoreply(target, parsed, mail_from)
+                    if msg.folder == Message.Folder.INBOX:
+                        from . import notify
+                        notify.notify_new_mail(target, msg)
             else:
                 delivery.enqueue(None, "", [target], raw)  # alias forward
     if delivered == 0:

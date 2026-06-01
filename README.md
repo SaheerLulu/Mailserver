@@ -62,12 +62,23 @@ PostgreSQL stores everything; raw `.eml` files and attachments live on the
 - **Vacation auto-responder** (loop-safe) and per-mailbox **signatures**
 - **Contacts / address book**
 
-**Interfaces**
-- Webmail: login, folders, conversations, read, compose, reply, attachments,
-  flag, labels, search, contacts, settings, view source
+**Sync & calendaring**
+- **CardDAV** contacts sync and **CalDAV** calendar sync (Apple/Thunderbird/DAVx⁵)
+- Built-in **calendar** in the webmail (events + ICS)
+
+**Auth & interfaces**
+- **OAuth2** token endpoint + **XOAUTH2** SASL for IMAP **and** SMTP
 - **REST API** (token auth) for folders, messages, sending and contacts
+- **Web Push** notifications (VAPID) + per-mailbox **webhooks** on new mail
+- Webmail: folders, conversations, compose/reply, attachments, labels, search,
+  contacts, calendar, settings
 - Full Django admin for everything (domains, mailboxes, aliases, filters,
-  labels, queue, tokens, spam corpus, greylist)
+  labels, queue, tokens, calendars/events, push subs, spam corpus, greylist)
+
+**Scaling / HA**
+- Stateless web/SMTP/IMAP/POP3 roles; **concurrency-safe queue** (SELECT … FOR
+  UPDATE SKIP LOCKED) so multiple queue workers run in parallel
+- Optional **Redis** for shared cache + sessions across web replicas
 - Per-mailbox quota field; CLI + admin account management
 
 ## Quick start
@@ -101,7 +112,29 @@ docker compose run --rm web python manage.py runqueue                    # queue
 docker compose run --rm web python manage.py runimap                     # imap service
 docker compose run --rm web python manage.py runpop3                     # pop3 service
 docker compose run --rm web python manage.py apitoken you@example.com    # mint a REST API token
+docker compose run --rm web python manage.py vapidkeys                   # Web Push (VAPID) keys
 ```
+
+### Sync (CalDAV / CardDAV)
+
+Point a client (Apple Contacts/Calendar, Thunderbird, DAVx⁵) at the server with
+the mailbox email + password. Discovery and collection URLs:
+
+```
+CardDAV : https://mail.example.com/dav/<email>/addressbook/
+CalDAV  : https://mail.example.com/dav/<email>/calendars/default/
+(autodiscovery: /.well-known/carddav, /.well-known/caldav)
+```
+
+### OAuth2 / XOAUTH2
+
+```bash
+# Get a token (password grant) and use it as a bearer or via XOAUTH2:
+curl -d grant_type=password -d username=you@example.com -d password=… \
+     http://your-host:8000/oauth/token
+```
+The returned token works as `Authorization: Bearer …` on the REST API and as
+the XOAUTH2 credential for IMAP and SMTP clients.
 
 ### REST API
 
@@ -119,29 +152,31 @@ Domains, mailboxes and aliases are also fully manageable in the Django admin.
 
 ## ⚠️ Scope & honest caveats
 
-This is now a fairly complete mail platform in readable Python: SMTP in/out,
-IMAP, POP3, a retrying queue, multi-signal spam filtering (heuristics + SPF +
-DKIM + Bayesian + DNSBL + greylisting), optional ClamAV, filters, labels,
-threading, search, contacts, a REST API and admin. Still, be clear-eyed about
-what it is **not** versus mature suites like mailcow or Gmail:
+This is now a broad mail platform in readable Python: SMTP in/out, IMAP, POP3,
+a retrying/concurrency-safe queue, multi-signal spam filtering (heuristics +
+SPF + DKIM + Bayesian + DNSBL + greylisting), optional ClamAV, filters, labels,
+threading, search, contacts, calendar, CalDAV/CardDAV sync, OAuth2/XOAUTH2,
+Web Push + webhooks, a REST API and admin. Honest remaining limits versus a
+mature suite like mailcow or Gmail:
 
 - **Spam/AV** is solid but lighter than a tuned Rspamd+ClamAV deployment (no
-  per-network reputation, OCR, or large rule corpora). The Bayesian classifier
-  needs training before it pulls weight.
-- **No calendar / CalDAV / CardDAV sync** (there's a contacts store + API, but
-  not a sync protocol), **no OAuth2 / XOAUTH2**, and **no mobile/web push**.
-  These are large separate products; they're honestly out of scope here.
-- **No built-in HA/clustering.** The web/SMTP/IMAP/POP3 roles are stateless and
-  scale horizontally, but you'd run Postgres replication + shared media storage
-  yourself.
-- The IMAP server implements a practical subset (enough for mainstream clients
-  to sync), not every RFC extension (no CONDSTORE/QRESYNC/IDLE-push, etc.).
+  per-network reputation, OCR or large rule corpora); Bayes needs training.
+- **DAV is a practical subset** — PROPFIND/REPORT/GET/PUT/DELETE and ctag/etag,
+  enough for clients to sync, but no `sync-collection` token, scheduling or
+  free/busy. **IMAP** likewise omits CONDSTORE/QRESYNC/IDLE-push.
+- **OAuth2** implements the password grant + bearer/XOAUTH2; there's no
+  authorization-code flow with a consent screen or client registry.
+- **Push** is browser/PWA **Web Push** (VAPID). Native **APNs/FCM** push needs
+  Apple/Google developer accounts and isn't included.
+- **HA** primitives are here (stateless roles, FOR-UPDATE-SKIP-LOCKED queue,
+  optional Redis cache/sessions) but you still run **Postgres replication** and
+  **shared media storage** yourself; no turnkey clustering.
 - **Deliverability still depends on DNS + IP reputation**: correct **PTR**,
   **SPF**, **DKIM**, **DMARC**, and a provider that allows **outbound port 25**.
   See [docs/DNS.md](docs/DNS.md).
 
 For a hardened, every-extension suite, use a dedicated stack. For understanding
-and owning the whole thing in Python, this goes a long way.
+and owning the whole thing in Python, this goes a very long way.
 
 ## Local development
 
@@ -170,11 +205,14 @@ mail/              the mail server app
   delivery.py      DKIM signing, outbound queue, MX lookup, SMTP relay
   dkimtools.py     DKIM keygen + signing
   smtp/handler.py  aiosmtpd handler + authenticator
-  imap/            IMAP4rev1 server (backend.py + server.py)
+  imap/            IMAP4rev1 server (backend.py + server.py; XOAUTH2)
   pop3/            POP3 server
   api.py           token-authenticated REST API
+  dav.py + ics.py  CalDAV/CardDAV server + vCard/iCalendar (de)serialization
+  oauth.py         OAuth2 token endpoint + XOAUTH2 validation
+  notify.py        new-mail webhooks + Web Push (VAPID)
   management/commands/   runsmtp, runqueue, runimap, runpop3,
-                         gendkim, createmailbox, apitoken
+                         gendkim, createmailbox, apitoken, vapidkeys
   views.py, urls.py, forms.py, admin.py, templates/
 docs/              SETUP and DNS guides
 Dockerfile, docker-compose.yml, entrypoint.sh, requirements.txt
