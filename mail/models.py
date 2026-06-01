@@ -194,8 +194,10 @@ class Message(models.Model):
 
     spam_score = models.FloatField(default=0.0)
     is_spam = models.BooleanField(default=False)
-    is_read = models.BooleanField(default=False)
-    is_flagged = models.BooleanField(default=False)
+    is_read = models.BooleanField(default=False)       # IMAP \Seen
+    is_flagged = models.BooleanField(default=False)     # IMAP \Flagged
+    is_answered = models.BooleanField(default=False)    # IMAP \Answered
+    imap_deleted = models.BooleanField(default=False)   # IMAP \Deleted (pending expunge)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -258,3 +260,76 @@ class OutboundMessage(models.Model):
     @property
     def recipient_list(self):
         return [r.strip() for r in self.recipients.split(",") if r.strip()]
+
+
+class Contact(models.Model):
+    """A personal address-book entry, owned by one mailbox."""
+    mailbox = models.ForeignKey(Mailbox, on_delete=models.CASCADE, related_name="contacts")
+    name = models.CharField(max_length=255, blank=True)
+    email = models.EmailField()
+    organization = models.CharField(max_length=255, blank=True)
+    phone = models.CharField(max_length=64, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("mailbox", "email")
+        ordering = ["name", "email"]
+
+    def __str__(self):
+        return f"{self.name} <{self.email}>" if self.name else self.email
+
+
+class ApiToken(models.Model):
+    """Bearer token for the REST API, scoped to a single mailbox."""
+    mailbox = models.ForeignKey(Mailbox, on_delete=models.CASCADE, related_name="api_tokens")
+    key = models.CharField(max_length=64, unique=True, db_index=True)
+    name = models.CharField(max_length=128, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used = models.DateTimeField(null=True, blank=True)
+
+    @staticmethod
+    def generate_key() -> str:
+        import secrets
+        return secrets.token_urlsafe(32)
+
+    def save(self, *args, **kwargs):
+        if not self.key:
+            self.key = self.generate_key()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.name or 'token'} ({self.mailbox_id})"
+
+
+class SpamToken(models.Model):
+    """Per-token spam/ham counts for the Bayesian classifier."""
+    token = models.CharField(max_length=128, unique=True, db_index=True)
+    spam = models.PositiveIntegerField(default=0)
+    ham = models.PositiveIntegerField(default=0)
+
+    def __str__(self):
+        return f"{self.token} (s={self.spam} h={self.ham})"
+
+
+class SpamCorpus(models.Model):
+    """Singleton totals: how many spam/ham messages have been learned."""
+    spam_messages = models.PositiveIntegerField(default=0)
+    ham_messages = models.PositiveIntegerField(default=0)
+
+    @classmethod
+    def get(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class GreylistEntry(models.Model):
+    """Greylisting triplet state (sender IP + envelope from + recipient)."""
+    key = models.CharField(max_length=64, unique=True, db_index=True)
+    first_seen = models.DateTimeField(auto_now_add=True)
+    accepted = models.BooleanField(default=False)
+    attempts = models.PositiveIntegerField(default=1)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.key} ({'accepted' if self.accepted else 'pending'})"

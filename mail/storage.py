@@ -141,12 +141,13 @@ def store_to_mailbox(mailbox, raw: bytes, folder=Message.Folder.INBOX,
     return msg
 
 
-def deposit(mailbox, raw: bytes, parsed=None, spam_score=0.0, allow_spam=True) -> Message:
+def deposit(mailbox, raw: bytes, parsed=None, spam_score=0.0, allow_spam=True,
+            force_spam=False) -> Message:
     """Run a mailbox's filters + spam routing, then store the message."""
     parsed = parsed or parsing.parse_message(raw)
     decision = rules.apply_filters(mailbox, parsed)
 
-    is_spam = decision["is_spam"]
+    is_spam = decision["is_spam"] or force_spam
     if allow_spam and spam_score >= mailbox.spam_threshold:
         is_spam = True
     folder = Message.Folder.JUNK if is_spam else decision["folder"]
@@ -161,10 +162,18 @@ def deposit(mailbox, raw: bytes, parsed=None, spam_score=0.0, allow_spam=True) -
 # --- SMTP entry points ------------------------------------------------------
 def handle_inbound(rcpt_tos, raw: bytes, peer_ip="", mail_from="", helo="") -> int:
     """Score, filter and deliver an inbound message to local recipients."""
-    from . import delivery, spam  # lazy: avoid import cycle
+    from . import antivirus, delivery, spam  # lazy: avoid import cycle
 
     parsed = parsing.parse_message(raw)
     score, reasons = spam.score_message(parsed, raw, peer_ip, mail_from, helo)
+
+    # Virus scan (best-effort): an infected message is force-routed to Junk.
+    clean, signature = antivirus.scan(raw)
+    force_spam = False
+    if not clean:
+        score += 100.0
+        force_spam = True
+        reasons.append(f"virus: {signature}")
     if reasons:
         log.info("spam score %.2f for <%s> (%s)", score, mail_from, "; ".join(reasons))
 
@@ -172,7 +181,8 @@ def handle_inbound(rcpt_tos, raw: bytes, peer_ip="", mail_from="", helo="") -> i
     for rcpt in rcpt_tos:
         for kind, target in resolve_recipients(rcpt):
             if kind == "local":
-                msg = deposit(target, raw, parsed, spam_score=score)
+                msg = deposit(target, raw, parsed, spam_score=score,
+                              force_spam=force_spam)
                 delivered += 1
                 if not msg.is_spam:
                     _maybe_autoreply(target, parsed, mail_from)

@@ -35,6 +35,11 @@ class MailHandler:
             else:
                 peer_ip = session.peer[0] if session.peer else ""
                 helo = getattr(session, "host_name", "") or ""
+                # Greylisting: ask senders to retry on first sighting.
+                from mail import greylist
+                if await sync_to_async(greylist.should_defer)(
+                        peer_ip, envelope.mail_from, list(envelope.rcpt_tos)):
+                    return "451 4.7.1 Greylisted, please retry shortly"
                 await sync_to_async(storage.handle_inbound)(
                     list(envelope.rcpt_tos), data, peer_ip,
                     envelope.mail_from, helo,

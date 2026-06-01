@@ -37,6 +37,17 @@ SMTP_SUBMISSION_PORT = int(os.environ.get("SMTP_SUBMISSION_PORT", "587"))
 # Optional STARTTLS material for the submission port.
 SMTP_TLS_CERT = os.environ.get("SMTP_TLS_CERT", "")
 SMTP_TLS_KEY = os.environ.get("SMTP_TLS_KEY", "")
+# IMAP / POP3 listener ports.
+IMAP_PORT = int(os.environ.get("IMAP_PORT", "143"))
+POP3_PORT = int(os.environ.get("POP3_PORT", "110"))
+
+# Greylisting: seconds a brand-new sender triplet is deferred before a retry
+# is accepted. Set to 0 to effectively disable.
+GREYLIST_DELAY_SECONDS = int(os.environ.get("GREYLIST_DELAY_SECONDS", "60"))
+
+# ClamAV virus scanning (optional). Leave CLAMAV_HOST blank to disable.
+CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "")
+CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", "3310"))
 
 # --- Applications -----------------------------------------------------------
 INSTALLED_APPS = [

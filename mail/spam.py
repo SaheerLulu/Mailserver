@@ -165,4 +165,19 @@ def score_message(parsed: dict, raw: bytes, peer_ip: str = "",
         score += 2.0
         reasons.append(f"spf={spf_result}")
 
+    # Bayesian classifier (neutral until trained).
+    from . import bayes
+    bayes_points, bayes_reason = bayes.score_points(parsed)
+    score += bayes_points
+    if bayes_reason:
+        reasons.append(bayes_reason)
+
+    # DNS blocklists for the connecting IP.
+    if peer_ip:
+        from . import dnsbl
+        rbl_points, zones = dnsbl.check(peer_ip)
+        if rbl_points:
+            score += rbl_points
+            reasons.append("rbl: " + ", ".join(zones))
+
     return max(0.0, round(score, 2)), reasons

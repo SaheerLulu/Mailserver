@@ -24,6 +24,16 @@ case "${1:-web}" in
     exec python manage.py runqueue
     ;;
 
+  imap)
+    echo "[imap] starting IMAP server"
+    exec python manage.py runimap
+    ;;
+
+  pop3)
+    echo "[pop3] starting POP3 server"
+    exec python manage.py runpop3
+    ;;
+
   *)
     exec "$@"
     ;;

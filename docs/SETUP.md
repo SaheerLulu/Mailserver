@@ -12,8 +12,9 @@ Bringing the Django mail server online on a public Linux host with Docker.
 - A host with a static public IP, hostname `mail.<domain>`, and a **PTR** record
   that resolves back to it (set at your VPS provider).
 - Docker Engine + Compose v2.
-- Ports 25, 587 and 8000 reachable (put a TLS-terminating reverse proxy in
-  front of 8000 for the webmail in production).
+- Ports 25, 587 (SMTP), 143/993 (IMAP), 110 (POP3) and 8000 (web) reachable.
+  Put a TLS-terminating reverse proxy in front of 8000 for the webmail, and set
+  `SMTP_TLS_CERT`/`SMTP_TLS_KEY` to enable STARTTLS/IMAPS.
 
 ## 2. Configure
 
@@ -82,9 +83,17 @@ Work through [DNS.md](DNS.md): **A/AAAA, PTR, MX, SPF, DKIM** (from step 5),
 - **Webmail + admin:** `http://mail.example.com:8000/` (`/admin/` for admin).
   Behind a reverse proxy, serve it over HTTPS and add the origin to
   `DJANGO_CSRF_TRUSTED_ORIGINS`.
-- **Desktop/phone SMTP (sending):** server `mail.example.com`, port **587**,
-  STARTTLS (if you configured TLS), username = full email, password = mailbox
-  password. (Reading is via webmail — there is no IMAP.)
+- **Desktop/phone mail client:**
+
+  | Setting | Value |
+  |---------|-------|
+  | Incoming IMAP | `mail.example.com`, **993** (TLS) or **143** (STARTTLS) |
+  | Incoming POP3 | `mail.example.com`, **110** |
+  | Outgoing SMTP | `mail.example.com`, **587** (STARTTLS) or **465** (TLS) |
+  | Username / password | full email address / mailbox password |
+
+- **REST API:** mint a token with `manage.py apitoken you@example.com` and call
+  `/api/...` with `Authorization: Bearer <token>` (see the README).
 
 ## Day-2
 

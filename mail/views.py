@@ -130,10 +130,12 @@ def message_action(request, pk):
         message.folder = Message.Folder.JUNK
         message.is_spam = True
         message.save(update_fields=["folder", "is_spam"])
+        _train(message, is_spam=True)
     elif action == "notspam":
         message.folder = Message.Folder.INBOX
         message.is_spam = False
         message.save(update_fields=["folder", "is_spam"])
+        _train(message, is_spam=False)
     elif action == "flag":
         message.is_flagged = not message.is_flagged
         message.save(update_fields=["is_flagged"])
@@ -151,6 +153,16 @@ def message_action(request, pk):
         message.save(update_fields=["folder"])
 
     return redirect(redirect_to)
+
+
+def _train(message, is_spam):
+    """Feed a message into the Bayesian classifier (best-effort)."""
+    from . import bayes
+    try:
+        bayes.train({"subject": message.subject, "from_addr": message.from_addr,
+                     "body_text": message.body_text}, is_spam=is_spam)
+    except Exception:  # noqa: BLE001
+        log.exception("Bayes training failed")
 
 
 @login_required
@@ -200,6 +212,26 @@ def compose_view(request):
         form = ComposeForm(initial=initial)
 
     return render(request, "mail/compose.html", {"form": form, **_sidebar(request.user)})
+
+
+@login_required
+def contacts_view(request):
+    from .models import Contact
+    if request.method == "POST" and request.POST.get("delete"):
+        Contact.objects.filter(mailbox=request.user, pk=request.POST["delete"]).delete()
+        return redirect("contacts")
+    if request.method == "POST":
+        email = (request.POST.get("email") or "").strip().lower()
+        if email:
+            Contact.objects.update_or_create(
+                mailbox=request.user, email=email,
+                defaults={"name": request.POST.get("name", ""),
+                          "organization": request.POST.get("organization", ""),
+                          "phone": request.POST.get("phone", "")})
+            messages.success(request, "Contact saved.")
+        return redirect("contacts")
+    return render(request, "mail/contacts.html",
+                  {"contacts": request.user.contacts.all(), **_sidebar(request.user)})
 
 
 @login_required

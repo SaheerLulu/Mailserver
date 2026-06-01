@@ -3,8 +3,9 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import BaseUserCreationForm, UserChangeForm
 
-from .models import (Alias, Attachment, Domain, Filter, Label, Mailbox,
-                     Message, OutboundMessage)
+from .models import (Alias, ApiToken, Attachment, Contact, Domain, Filter,
+                     GreylistEntry, Label, Mailbox, Message, OutboundMessage,
+                     SpamCorpus, SpamToken)
 
 
 class MailboxCreationForm(BaseUserCreationForm):
@@ -112,3 +113,34 @@ class OutboundMessageAdmin(admin.ModelAdmin):
         updated = queryset.update(status=OutboundMessage.Status.QUEUED,
                                   next_attempt=timezone.now(), attempts=0)
         self.message_user(request, f"{updated} message(s) requeued.")
+
+
+@admin.register(Contact)
+class ContactAdmin(admin.ModelAdmin):
+    list_display = ("name", "email", "organization", "mailbox")
+    list_filter = ("mailbox",)
+    search_fields = ("name", "email", "organization")
+
+
+@admin.register(ApiToken)
+class ApiTokenAdmin(admin.ModelAdmin):
+    list_display = ("name", "mailbox", "key", "created_at", "last_used")
+    list_filter = ("mailbox",)
+    readonly_fields = ("key", "created_at", "last_used")
+
+
+@admin.register(SpamToken)
+class SpamTokenAdmin(admin.ModelAdmin):
+    list_display = ("token", "spam", "ham")
+    search_fields = ("token",)
+
+
+@admin.register(SpamCorpus)
+class SpamCorpusAdmin(admin.ModelAdmin):
+    list_display = ("spam_messages", "ham_messages")
+
+
+@admin.register(GreylistEntry)
+class GreylistAdmin(admin.ModelAdmin):
+    list_display = ("key", "accepted", "attempts", "first_seen", "last_seen")
+    list_filter = ("accepted",)
