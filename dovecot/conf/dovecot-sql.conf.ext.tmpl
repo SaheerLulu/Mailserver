@@ -1,0 +1,27 @@
+# ============================================================================
+#  Dovecot ↔ PostgreSQL queries (rendered from template at container start)
+# ============================================================================
+driver = pgsql
+
+connect = host=${POSTGRES_HOST} dbname=${POSTGRES_DB} user=${POSTGRES_USER} password=${POSTGRES_PASSWORD}
+
+# Passwords are stored as bcrypt (BLF-CRYPT) hashes — see scripts/add-user.sh.
+default_pass_scheme = BLF-CRYPT
+
+# Verify a login. %u = full address.
+password_query = \
+    SELECT email AS user, password \
+    FROM virtual_users \
+    WHERE email = '%u' AND enabled = TRUE
+
+# Describe the mailbox on disk. %d = domain, %n = local part.
+# quota_bytes = 0 is treated by Dovecot as "unlimited".
+user_query = \
+    SELECT '/var/mail/vhosts/%d/%n' AS home, \
+           5000 AS uid, 5000 AS gid, \
+           '*:bytes=' || quota_bytes AS quota_rule \
+    FROM virtual_users \
+    WHERE email = '%u' AND enabled = TRUE
+
+# Used by `doveadm` to enumerate all mailboxes.
+iterate_query = SELECT email AS user FROM virtual_users WHERE enabled = TRUE

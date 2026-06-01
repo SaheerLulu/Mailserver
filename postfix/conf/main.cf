@@ -1,0 +1,99 @@
+# ============================================================================
+#  Postfix main.cf — self-hosted mail server
+#
+#  Dynamic values (myhostname, mydomain, myorigin) are set at container start
+#  by entrypoint.sh via `postconf`. Everything else lives here.
+# ============================================================================
+
+compatibility_level = 3.6
+
+# --- Logging: write to stdout so `docker logs` works ------------------------
+maillog_file = /dev/stdout
+
+# --- Network ----------------------------------------------------------------
+inet_interfaces = all
+inet_protocols = all
+# Trust the internal docker network and loopback only. Authenticated clients
+# relay via SASL, not by IP, so mynetworks stays deliberately small.
+mynetworks = 127.0.0.0/8 [::1]/128 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+
+# --- Size limits ------------------------------------------------------------
+message_size_limit = 52428800
+mailbox_size_limit = 0
+biff = no
+append_dot_mydomain = no
+readme_directory = no
+
+# --- No local Unix delivery: all mail is virtual ----------------------------
+mydestination =
+local_recipient_maps =
+local_transport = error:local mail delivery is disabled
+
+# --- Virtual mailbox delivery handed to Dovecot over LMTP -------------------
+virtual_transport = lmtp:inet:dovecot:24
+virtual_mailbox_domains = pgsql:/etc/postfix/pgsql/virtual_domains.cf
+virtual_mailbox_maps = pgsql:/etc/postfix/pgsql/virtual_mailboxes.cf
+virtual_alias_maps = pgsql:/etc/postfix/pgsql/virtual_aliases.cf
+
+# --- TLS: inbound/server ----------------------------------------------------
+smtpd_tls_cert_file = /etc/ssl/mail/fullchain.pem
+smtpd_tls_key_file = /etc/ssl/mail/privkey.pem
+smtpd_tls_security_level = may
+smtpd_tls_protocols = >=TLSv1.2
+smtpd_tls_mandatory_protocols = >=TLSv1.2
+smtpd_tls_loglevel = 1
+smtpd_tls_received_header = yes
+smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache
+
+# --- TLS: outbound/client ---------------------------------------------------
+smtp_tls_security_level = may
+smtp_tls_protocols = >=TLSv1.2
+smtp_tls_loglevel = 1
+smtp_tls_CApath = /etc/ssl/certs
+smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache
+
+# --- SASL authentication, provided by Dovecot over the internal network -----
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = inet:dovecot:12345
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_security_options = noanonymous
+smtpd_sasl_local_domain = $myhostname
+broken_sasl_auth_clients = yes
+
+# An authenticated user may only send mail as an address they own.
+smtpd_sender_login_maps = pgsql:/etc/postfix/pgsql/sender_login_maps.cf
+
+# --- Smtpd restrictions -----------------------------------------------------
+smtpd_helo_required = yes
+smtpd_delay_reject = yes
+disable_vrfy_command = yes
+
+smtpd_helo_restrictions =
+    permit_mynetworks
+    permit_sasl_authenticated
+    reject_invalid_helo_hostname
+    reject_non_fqdn_helo_hostname
+
+smtpd_sender_restrictions =
+    permit_mynetworks
+    permit_sasl_authenticated
+    reject_unknown_sender_domain
+
+smtpd_relay_restrictions =
+    permit_mynetworks
+    permit_sasl_authenticated
+    reject_unauth_destination
+
+smtpd_recipient_restrictions =
+    permit_mynetworks
+    permit_sasl_authenticated
+    reject_unauth_destination
+    reject_unknown_recipient_domain
+    reject_unauth_pipelining
+
+# --- Rspamd milter (spam scoring + DKIM signing) ----------------------------
+smtpd_milters = inet:rspamd:11332
+non_smtpd_milters = inet:rspamd:11332
+milter_protocol = 6
+milter_mail_macros = i {mail_addr} {client_addr} {client_name} {auth_authen}
+milter_default_action = accept

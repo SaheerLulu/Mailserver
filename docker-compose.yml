@@ -1,0 +1,121 @@
+# ============================================================================
+#  Self-hosted mail server — service orchestration
+#
+#  Services:
+#    postgres  — stores virtual domains, users (mailboxes) and aliases
+#    postfix   — MTA: SMTP (25), Submission (587), SMTPS (465)
+#    dovecot   — IMAP (143/993), LMTP delivery, SASL auth, Sieve/ManageSieve
+#    rspamd    — spam filtering + DKIM signing (milter)
+#    redis     — backing store for rspamd (bayes, ratelimit, greylist)
+#
+#  Configure everything through the .env file (copy from .env.example).
+# ============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mail-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mailnet
+
+  redis:
+    image: redis:7-alpine
+    container_name: mail-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "900", "1", "--appendonly", "no"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mailnet
+
+  rspamd:
+    image: rspamd/rspamd:3.8
+    container_name: mail-rspamd
+    restart: unless-stopped
+    hostname: rspamd
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./rspamd/local.d:/etc/rspamd/local.d:ro
+      - ./rspamd/override.d:/etc/rspamd/override.d:ro
+      - ./dkim:/var/lib/rspamd/dkim
+      - rspamd-data:/var/lib/rspamd
+    ports:
+      # Web UI / controller — bound to localhost only. Tunnel in via SSH.
+      - "127.0.0.1:11334:11334"
+    networks:
+      - mailnet
+
+  dovecot:
+    build: ./dovecot
+    image: selfhosted-mail/dovecot
+    container_name: mail-dovecot
+    restart: unless-stopped
+    hostname: ${MAIL_HOSTNAME}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./certs:/etc/ssl/mail:ro
+      - maildata:/var/mail/vhosts
+    ports:
+      - "143:143"    # IMAP (STARTTLS)
+      - "993:993"    # IMAPS (implicit TLS)
+      - "4190:4190"  # ManageSieve
+    networks:
+      - mailnet
+
+  postfix:
+    build: ./postfix
+    image: selfhosted-mail/postfix
+    container_name: mail-postfix
+    restart: unless-stopped
+    hostname: ${MAIL_HOSTNAME}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dovecot:
+        condition: service_started
+      rspamd:
+        condition: service_started
+    env_file: .env
+    volumes:
+      - ./certs:/etc/ssl/mail:ro
+      - postfix-spool:/var/spool/postfix
+    ports:
+      - "25:25"      # SMTP (inbound + MTA-to-MTA)
+      - "465:465"    # SMTPS (implicit TLS submission)
+      - "587:587"    # Submission (STARTTLS)
+    networks:
+      - mailnet
+
+networks:
+  mailnet:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  rspamd-data:
+  maildata:
+  postfix-spool:

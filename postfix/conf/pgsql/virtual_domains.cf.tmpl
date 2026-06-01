@@ -1,0 +1,6 @@
+# Is this domain one we accept mail for? (virtual_mailbox_domains)
+hosts = ${POSTGRES_HOST}
+dbname = ${POSTGRES_DB}
+user = ${POSTGRES_USER}
+password = ${POSTGRES_PASSWORD}
+query = SELECT 1 FROM virtual_domains WHERE name='%s'

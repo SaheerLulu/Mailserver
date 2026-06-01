@@ -1,0 +1,13 @@
+# Secrets / local configuration
+.env
+
+# TLS material
+certs/*.pem
+certs/*.key
+certs/*.crt
+
+# DKIM private keys (keep the .txt DNS records, ignore the keys)
+dkim/*.key
+
+# Local runtime artifacts
+*.log

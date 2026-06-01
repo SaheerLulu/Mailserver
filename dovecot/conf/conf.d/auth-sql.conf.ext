@@ -1,0 +1,10 @@
+# SQL-backed password and user databases. The connection details and queries
+# live in /etc/dovecot/dovecot-sql.conf.ext (rendered at container start).
+passdb {
+  driver = sql
+  args = /etc/dovecot/dovecot-sql.conf.ext
+}
+userdb {
+  driver = sql
+  args = /etc/dovecot/dovecot-sql.conf.ext
+}
