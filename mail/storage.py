@@ -1,17 +1,22 @@
 """Database-facing operations used by the SMTP service and the webmail views.
 
-These functions are plain synchronous Django ORM code. The async SMTP handlers
-call them through ``asgiref.sync.sync_to_async``.
+Plain synchronous Django ORM code; the async SMTP handlers call these through
+``asgiref.sync.sync_to_async``.
 """
 import logging
+import re
+import uuid
 
 from django.core.files.base import ContentFile
 from django.utils.text import get_valid_filename
 
-from . import parsing
-from .models import Alias, Domain, Mailbox, Message
+from . import parsing, rules
+from .models import Alias, Domain, Label, Mailbox, Message
 
 log = logging.getLogger("mail")
+
+_MSGID_RE = re.compile(r"<[^>]+>")
+_SUBJECT_PREFIX_RE = re.compile(r"^\s*(re|fwd|fw|aw|sv)\s*:\s*", re.IGNORECASE)
 
 
 def normalize(address: str) -> str:
@@ -23,7 +28,6 @@ def is_local_domain(domain: str) -> bool:
 
 
 def is_deliverable(address: str) -> bool:
-    """Whether we accept mail for ``address`` (mailbox, alias, or catch-all)."""
     address = normalize(address)
     if "@" not in address:
         return False
@@ -38,11 +42,6 @@ def is_deliverable(address: str) -> bool:
 
 
 def resolve_recipients(address: str, _seen=None):
-    """Expand ``address`` to a list of ``("local", Mailbox)`` / ``("remote", str)``.
-
-    Aliases (including ``@domain`` catch-alls) are followed recursively with a
-    loop guard.
-    """
     address = normalize(address)
     if _seen is None:
         _seen = set()
@@ -74,15 +73,42 @@ def authenticate(email: str, password: str):
     return None
 
 
+# --- Conversation threading -------------------------------------------------
+def _normalize_subject(subject: str) -> str:
+    prev = None
+    s = subject or ""
+    while s != prev:
+        prev = s
+        s = _SUBJECT_PREFIX_RE.sub("", s)
+    return s.strip().lower()
+
+
+def resolve_thread_id(mailbox, parsed: dict) -> str:
+    refs = _MSGID_RE.findall(
+        f"{parsed.get('in_reply_to', '')} {parsed.get('references', '')}")
+    if refs:
+        existing = (Message.objects.filter(mailbox=mailbox, message_id__in=refs)
+                    .exclude(thread_id="").first())
+        if existing:
+            return existing.thread_id
+    if parsed.get("message_id"):
+        return parsed["message_id"][:255]
+    subject = _normalize_subject(parsed.get("subject", ""))
+    return (f"subj:{subject}"[:255]) if subject else f"thread:{uuid.uuid4()}"
+
+
+# --- Persisting -------------------------------------------------------------
 def store_to_mailbox(mailbox, raw: bytes, folder=Message.Folder.INBOX,
-                     parsed=None, mark_read=False) -> Message:
-    """Persist a message (and its attachments) into ``mailbox``/``folder``."""
+                     parsed=None, mark_read=False, spam_score=0.0,
+                     is_spam=False, star=False, label_names=None) -> Message:
     parsed = parsed or parsing.parse_message(raw)
     msg = Message(
         mailbox=mailbox,
         folder=folder,
         message_id=parsed["message_id"][:998],
         in_reply_to=parsed["in_reply_to"][:998],
+        references=parsed.get("references", ""),
+        thread_id=resolve_thread_id(mailbox, parsed),
         from_addr=parsed["from_addr"][:998],
         to_addrs=parsed["to_addrs"],
         cc_addrs=parsed["cc_addrs"],
@@ -91,11 +117,18 @@ def store_to_mailbox(mailbox, raw: bytes, folder=Message.Folder.INBOX,
         body_text=parsed["body_text"],
         body_html=parsed["body_html"],
         size=len(raw),
+        spam_score=spam_score,
+        is_spam=is_spam,
         is_read=mark_read,
+        is_flagged=star,
     )
     base = (parsed["message_id"].strip("<>") or "message").split("@")[0]
     msg.eml.save(get_valid_filename(f"{base}.eml"), ContentFile(raw), save=False)
     msg.save()
+
+    for name in (label_names or []):
+        label, _ = Label.objects.get_or_create(mailbox=mailbox, name=name[:64])
+        msg.labels.add(label)
 
     for att in parsed["attachments"]:
         attachment = msg.attachments.create(
@@ -108,29 +141,65 @@ def store_to_mailbox(mailbox, raw: bytes, folder=Message.Folder.INBOX,
     return msg
 
 
-def handle_inbound(rcpt_tos, raw: bytes) -> int:
-    """Deliver an inbound message to every resolved local recipient."""
-    from . import delivery  # lazy: avoid import cycle
+def deposit(mailbox, raw: bytes, parsed=None, spam_score=0.0, allow_spam=True) -> Message:
+    """Run a mailbox's filters + spam routing, then store the message."""
+    parsed = parsed or parsing.parse_message(raw)
+    decision = rules.apply_filters(mailbox, parsed)
+
+    is_spam = decision["is_spam"]
+    if allow_spam and spam_score >= mailbox.spam_threshold:
+        is_spam = True
+    folder = Message.Folder.JUNK if is_spam else decision["folder"]
+
+    return store_to_mailbox(
+        mailbox, raw, folder=folder, parsed=parsed,
+        mark_read=decision["mark_read"], star=decision["star"],
+        spam_score=spam_score, is_spam=is_spam, label_names=decision["labels"],
+    )
+
+
+# --- SMTP entry points ------------------------------------------------------
+def handle_inbound(rcpt_tos, raw: bytes, peer_ip="", mail_from="", helo="") -> int:
+    """Score, filter and deliver an inbound message to local recipients."""
+    from . import delivery, spam  # lazy: avoid import cycle
 
     parsed = parsing.parse_message(raw)
+    score, reasons = spam.score_message(parsed, raw, peer_ip, mail_from, helo)
+    if reasons:
+        log.info("spam score %.2f for <%s> (%s)", score, mail_from, "; ".join(reasons))
+
     delivered = 0
     for rcpt in rcpt_tos:
         for kind, target in resolve_recipients(rcpt):
             if kind == "local":
-                store_to_mailbox(target, raw, Message.Folder.INBOX, parsed)
+                msg = deposit(target, raw, parsed, spam_score=score)
                 delivered += 1
+                if not msg.is_spam:
+                    _maybe_autoreply(target, parsed, mail_from)
             else:
-                # Alias forwarding to a remote address; use a null envelope
-                # sender to avoid generating backscatter.
-                delivery.relay("", [target], raw)
+                delivery.enqueue(None, "", [target], raw)  # alias forward
     if delivered == 0:
         log.warning("Inbound message for %s had no local recipients", rcpt_tos)
     return delivered
 
 
 def handle_submission(auth_login, mail_from, rcpt_tos, raw: bytes):
-    """An authenticated user is sending mail."""
     from . import delivery  # lazy: avoid import cycle
 
     mailbox = Mailbox.objects.filter(email=normalize(auth_login)).first()
     delivery.send_outbound(mailbox, mail_from, rcpt_tos, raw, store_sent=True)
+
+
+def _maybe_autoreply(mailbox, parsed, mail_from):
+    """Send a vacation auto-reply, guarding against loops/bulk mail."""
+    if not mailbox.vacation_enabled or not mailbox.vacation_message:
+        return
+    sender = normalize(mail_from)
+    if not sender or sender == normalize(mailbox.email):
+        return
+    if parsed.get("auto_submitted") and parsed["auto_submitted"].lower() != "no":
+        return
+    if parsed.get("list_id") or parsed.get("precedence", "").lower() in ("bulk", "list", "junk"):
+        return
+    from . import delivery
+    delivery.send_autoreply(mailbox, sender)

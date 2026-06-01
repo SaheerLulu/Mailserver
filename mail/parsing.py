@@ -58,6 +58,11 @@ def parse_message(raw: bytes) -> dict:
     return {
         "message_id": (msg["Message-ID"] or "").strip(),
         "in_reply_to": (msg["In-Reply-To"] or "").strip(),
+        "references": (msg["References"] or "").strip(),
+        "auto_submitted": (msg["Auto-Submitted"] or "").strip(),
+        "list_id": (msg["List-Id"] or "").strip(),
+        "precedence": (msg["Precedence"] or "").strip(),
+        "has_dkim_header": msg["DKIM-Signature"] is not None,
         "from_addr": (msg["From"] or "").strip(),
         "to_addrs": _addr_list(msg, "To"),
         "cc_addrs": _addr_list(msg, "Cc"),

@@ -19,6 +19,11 @@ case "${1:-web}" in
     exec python manage.py runsmtp
     ;;
 
+  queue)
+    echo "[queue] starting outbound delivery worker"
+    exec python manage.py runqueue
+    ;;
+
   *)
     exec "$@"
     ;;

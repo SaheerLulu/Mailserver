@@ -54,7 +54,12 @@
 {% if user.is_authenticated %}
   <header>
     <span class="brand">📬 Webmail</span>
+    <form method="get" action="{% url 'search' %}" style="flex:1; max-width:520px; margin:0 1rem;">
+      <input type="text" name="q" value="{{ query|default:'' }}"
+             placeholder="Search mail…" style="width:100%;">
+    </form>
     <span class="user">{{ user.email }} ·
+      <a href="{% url 'settings' %}">settings</a> ·
       {% if user.is_staff %}<a href="/admin/">admin</a> · {% endif %}
       <a href="{% url 'logout' %}">sign out</a></span>
   </header>
@@ -68,6 +73,19 @@
           {% if f.unread %}<span class="count">{{ f.unread }}</span>{% endif %}
         </a>
       {% endfor %}
+      {% if label_list %}
+        <div style="margin:.8rem .4rem .3rem; color:var(--muted); font-size:.75rem; text-transform:uppercase;">Labels</div>
+        {% for l in label_list %}
+          <a class="folder" href="{% url 'label' pk=l.pk %}">
+            <span><span style="display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:{{ l.color }};margin-right:.4rem;"></span>{{ l.name }}</span>
+          </a>
+        {% endfor %}
+      {% endif %}
+      <form method="post" action="{% url 'label_create' %}" style="margin:.6rem .4rem;">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <input type="text" name="name" placeholder="+ new label" style="font-size:.85rem;">
+      </form>
     </nav>
     <main>
       {% if messages %}

@@ -3,7 +3,8 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import BaseUserCreationForm, UserChangeForm
 
-from .models import Alias, Attachment, Domain, Mailbox, Message
+from .models import (Alias, Attachment, Domain, Filter, Label, Mailbox,
+                     Message, OutboundMessage)
 
 
 class MailboxCreationForm(BaseUserCreationForm):
@@ -30,7 +31,10 @@ class MailboxAdmin(UserAdmin):
     readonly_fields = ("last_login",)
     fieldsets = (
         (None, {"fields": ("email", "password")}),
-        ("Profile", {"fields": ("full_name", "domain", "quota_bytes")}),
+        ("Profile", {"fields": ("full_name", "domain", "quota_bytes", "signature")}),
+        ("Spam", {"fields": ("spam_threshold",)}),
+        ("Vacation auto-reply", {"fields": ("vacation_enabled", "vacation_subject",
+                                            "vacation_message")}),
         ("Permissions", {"fields": ("is_active", "is_staff", "is_superuser",
                                     "groups", "user_permissions")}),
         ("Important dates", {"fields": ("last_login",)}),
@@ -68,9 +72,43 @@ class AttachmentInline(admin.TabularInline):
 
 @admin.register(Message)
 class MessageAdmin(admin.ModelAdmin):
-    list_display = ("subject", "mailbox", "folder", "from_addr", "date", "is_read")
-    list_filter = ("folder", "is_read", "is_flagged")
-    search_fields = ("subject", "from_addr", "to_addrs", "message_id")
+    list_display = ("subject", "mailbox", "folder", "from_addr", "date",
+                    "spam_score", "is_spam", "is_read")
+    list_filter = ("folder", "is_spam", "is_read", "is_flagged")
+    search_fields = ("subject", "from_addr", "to_addrs", "message_id", "body_text")
     date_hierarchy = "date"
     inlines = [AttachmentInline]
-    readonly_fields = ("created_at", "size", "message_id", "in_reply_to")
+    readonly_fields = ("created_at", "size", "message_id", "in_reply_to",
+                       "thread_id", "spam_score")
+
+
+@admin.register(Label)
+class LabelAdmin(admin.ModelAdmin):
+    list_display = ("name", "mailbox", "color")
+    search_fields = ("name",)
+    list_filter = ("mailbox",)
+
+
+@admin.register(Filter)
+class FilterAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "mailbox", "priority", "action", "action_arg", "is_active")
+    list_filter = ("mailbox", "is_active", "action")
+    list_editable = ("priority", "is_active")
+
+
+@admin.register(OutboundMessage)
+class OutboundMessageAdmin(admin.ModelAdmin):
+    list_display = ("pk", "status", "mail_from", "recipients", "attempts",
+                    "next_attempt", "updated_at")
+    list_filter = ("status",)
+    search_fields = ("mail_from", "recipients")
+    readonly_fields = ("created_at", "updated_at", "attempts", "last_error")
+
+    actions = ["requeue"]
+
+    @admin.action(description="Requeue selected (retry now)")
+    def requeue(self, request, queryset):
+        from django.utils import timezone
+        updated = queryset.update(status=OutboundMessage.Status.QUEUED,
+                                  next_attempt=timezone.now(), attempts=0)
+        self.message_user(request, f"{updated} message(s) requeued.")

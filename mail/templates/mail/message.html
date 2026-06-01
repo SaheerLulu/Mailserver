@@ -10,35 +10,54 @@
       <button class="btn" name="action" value="flag">{% if message.is_flagged %}Unflag{% else %}Flag{% endif %}</button>
       <button class="btn" name="action" value="unread">Mark unread</button>
       <button class="btn" name="action" value="ARCHIVE">Archive</button>
+      {% if message.is_spam or message.folder == 'JUNK' %}
+        <button class="btn" name="action" value="notspam">Not spam</button>
+      {% else %}
+        <button class="btn" name="action" value="spam">Spam</button>
+      {% endif %}
       <button class="btn" name="action" value="trash">Trash</button>
       {% if message.folder == 'TRASH' %}
         <button class="btn" name="action" value="delete"
                 onclick="return confirm('Permanently delete this message?')">Delete</button>
       {% endif %}
     </form>
+    {% if all_labels %}
+      <form class="inline" method="post" action="{% url 'message_action' pk=message.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{% url 'message' pk=message.pk %}">
+        <input type="hidden" name="action" value="label">
+        <select name="label_id" onchange="this.form.submit()" class="btn">
+          <option value="">Toggle label…</option>
+          {% for l in all_labels %}<option value="{{ l.pk }}">{{ l.name }}</option>{% endfor %}
+        </select>
+      </form>
+    {% endif %}
     <a class="btn" href="{% url 'message_raw' pk=message.pk %}">View source</a>
   </div>
 
-  <div class="panel">
-    <div class="msg-head">
-      <h1>{{ message.subject|default:'(no subject)' }}</h1>
+  <h1 style="font-size:1.3rem;">{{ message.subject|default:'(no subject)' }}
+    {% for l in message.labels.all %}
+      <span style="background:{{ l.color }};color:#fff;border-radius:4px;padding:0 .4rem;font-size:.7rem;">{{ l.name }}</span>
+    {% endfor %}
+  </h1>
+
+  {% for m in thread %}
+    <div class="panel" style="margin-bottom:1rem;{% if m.pk == message.pk %}border-color:var(--accent);{% endif %}">
       <div class="msg-meta">
-        <strong>From:</strong> {{ message.from_addr }}<br>
-        <strong>To:</strong> {{ message.to_addrs }}<br>
-        {% if message.cc_addrs %}<strong>Cc:</strong> {{ message.cc_addrs }}<br>{% endif %}
-        <strong>Date:</strong> {{ message.date|date:"D, j M Y H:i" }}
+        <strong>From:</strong> {{ m.from_addr }}<br>
+        <strong>To:</strong> {{ m.to_addrs }}
+        {% if m.cc_addrs %}<br><strong>Cc:</strong> {{ m.cc_addrs }}{% endif %}<br>
+        <strong>Date:</strong> {{ m.date|date:"D, j M Y H:i" }}
+        {% if m.is_spam %} · <span style="color:#b91c1c;">spam score {{ m.spam_score }}</span>{% endif %}
       </div>
+      {% if m.attachments.all %}
+        <div style="margin-bottom:1rem;"><strong>Attachments:</strong>
+          {% for a in m.attachments.all %}
+            <a class="btn" href="{% url 'attachment' pk=a.pk %}">📎 {{ a.filename }} ({{ a.size|filesizeformat }})</a>
+          {% endfor %}
+        </div>
+      {% endif %}
+      <div class="msg-body">{% if m.body_text %}{{ m.body_text }}{% else %}{{ m.body_html|striptags }}{% endif %}</div>
     </div>
-
-    {% if message.attachments.all %}
-      <div style="margin-bottom:1rem;">
-        <strong>Attachments:</strong>
-        {% for a in message.attachments.all %}
-          <a class="btn" href="{% url 'attachment' pk=a.pk %}">📎 {{ a.filename }} ({{ a.size|filesizeformat }})</a>
-        {% endfor %}
-      </div>
-    {% endif %}
-
-    <div class="msg-body">{% if message.body_text %}{{ message.body_text }}{% else %}{{ message.body_html|striptags }}{% endif %}</div>
-  </div>
+  {% endfor %}
 {% endblock %}

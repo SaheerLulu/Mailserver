@@ -40,7 +40,7 @@ docker run --rm -p 80:80 -v "$PWD/certs:/etc/letsencrypt" \
 
 ```bash
 docker compose up -d --build
-docker compose ps          # postgres + web healthy, smtp running
+docker compose ps          # postgres + web healthy; smtp + queue running
 docker compose logs -f     # watch startup
 ```
 
@@ -62,6 +62,14 @@ docker compose run --rm web python manage.py gendkim example.com
 Aliases and catch-alls: add them in the admin (`/admin/mail/alias/`), e.g.
 source `info@example.com` → destination `you@example.com`, or a catch-all with
 source `@example.com`.
+
+**Filters, labels, signature & vacation:** server-side filter rules and labels
+are managed in the admin (`/admin/mail/filter/`, `/admin/mail/label/`) — or
+labels straight from the webmail sidebar. Each user sets their signature, spam
+threshold and vacation auto-reply on the webmail **Settings** page.
+
+**Outbound queue:** remote mail is delivered by the `queue` worker with retry
+and backoff. Inspect or requeue stuck items in `/admin/mail/outboundmessage/`.
 
 ## 6. Publish DNS
 

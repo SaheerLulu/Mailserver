@@ -2,17 +2,17 @@ import logging
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db.models import Q
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from . import delivery
-from .forms import ComposeForm
-from .models import Message
+from .forms import ComposeForm, SettingsForm
+from .models import Label, Message
 
 log = logging.getLogger("mail")
 
-# Folders shown in the sidebar, in order.
 FOLDERS = [
     Message.Folder.INBOX, Message.Folder.SENT, Message.Folder.DRAFTS,
     Message.Folder.JUNK, Message.Folder.ARCHIVE, Message.Folder.TRASH,
@@ -28,7 +28,27 @@ def _sidebar(user, current=None):
             "label": f.capitalize(),
             "unread": qs.filter(is_read=False).count() if f != Message.Folder.SENT else 0,
         })
-    return {"folder_list": folder_list, "current_folder": current}
+    return {
+        "folder_list": folder_list,
+        "current_folder": current,
+        "label_list": user.labels.all(),
+    }
+
+
+def _threaded(qs):
+    """Collapse a message queryset (ordered newest-first) into conversations."""
+    seen, items = {}, []
+    for m in qs:
+        if m.thread_id and m.thread_id in seen:
+            seen[m.thread_id]["count"] += 1
+            if not m.is_read:
+                seen[m.thread_id]["unread"] = True
+            continue
+        entry = {"msg": m, "count": 1, "unread": not m.is_read}
+        if m.thread_id:
+            seen[m.thread_id] = entry
+        items.append(entry)
+    return items
 
 
 @login_required
@@ -36,19 +56,59 @@ def mailbox_view(request, folder="INBOX"):
     folder = folder.upper()
     if folder not in Message.Folder.values:
         raise Http404("Unknown folder")
-    message_list = request.user.messages.filter(folder=folder)
-    context = {"folder": folder, "message_list": message_list,
-               **_sidebar(request.user, folder)}
+    qs = request.user.messages.filter(folder=folder).prefetch_related("labels")
+    context = {
+        "folder": folder,
+        "heading": folder.capitalize(),
+        "threads": _threaded(qs),
+        **_sidebar(request.user, folder),
+    }
+    return render(request, "mail/mailbox.html", context)
+
+
+@login_required
+def search_view(request):
+    q = request.GET.get("q", "").strip()
+    threads = []
+    if q:
+        terms = q.split()
+        query = Q()
+        for t in terms:
+            query &= (Q(subject__icontains=t) | Q(body_text__icontains=t)
+                      | Q(from_addr__icontains=t) | Q(to_addrs__icontains=t))
+        qs = (request.user.messages.filter(query)
+              .exclude(folder=Message.Folder.TRASH).prefetch_related("labels"))
+        threads = _threaded(qs)
+    context = {"folder": None, "heading": f"Search: {q}" if q else "Search",
+               "threads": threads, "query": q, "is_search": True,
+               **_sidebar(request.user)}
+    return render(request, "mail/mailbox.html", context)
+
+
+@login_required
+def label_view(request, pk):
+    label = get_object_or_404(request.user.labels, pk=pk)
+    qs = label.messages.filter(mailbox=request.user).prefetch_related("labels")
+    context = {"folder": None, "heading": f"🏷 {label.name}",
+               "threads": _threaded(qs), **_sidebar(request.user)}
     return render(request, "mail/mailbox.html", context)
 
 
 @login_required
 def message_view(request, pk):
-    message = get_object_or_404(request.user.messages, pk=pk)
+    message = get_object_or_404(
+        request.user.messages.prefetch_related("labels", "attachments"), pk=pk)
     if not message.is_read:
         message.is_read = True
         message.save(update_fields=["is_read"])
-    context = {"message": message, **_sidebar(request.user)}
+    # Show the whole conversation.
+    if message.thread_id:
+        thread = (request.user.messages.filter(thread_id=message.thread_id)
+                  .order_by("date").prefetch_related("attachments"))
+    else:
+        thread = [message]
+    context = {"message": message, "thread": thread,
+               "all_labels": request.user.labels.all(), **_sidebar(request.user)}
     return render(request, "mail/message.html", context)
 
 
@@ -66,17 +126,42 @@ def message_action(request, pk):
     elif action == "trash":
         message.folder = Message.Folder.TRASH
         message.save(update_fields=["folder"])
+    elif action == "spam":
+        message.folder = Message.Folder.JUNK
+        message.is_spam = True
+        message.save(update_fields=["folder", "is_spam"])
+    elif action == "notspam":
+        message.folder = Message.Folder.INBOX
+        message.is_spam = False
+        message.save(update_fields=["folder", "is_spam"])
     elif action == "flag":
         message.is_flagged = not message.is_flagged
         message.save(update_fields=["is_flagged"])
     elif action == "unread":
         message.is_read = False
         message.save(update_fields=["is_read"])
+    elif action == "label":
+        label = get_object_or_404(request.user.labels, pk=request.POST.get("label_id"))
+        if message.labels.filter(pk=label.pk).exists():
+            message.labels.remove(label)
+        else:
+            message.labels.add(label)
     elif action in Message.Folder.values:
         message.folder = action
         message.save(update_fields=["folder"])
 
     return redirect(redirect_to)
+
+
+@login_required
+@require_POST
+def label_create(request):
+    name = request.POST.get("name", "").strip()
+    color = request.POST.get("color", "#6b7280").strip() or "#6b7280"
+    if name:
+        Label.objects.get_or_create(mailbox=request.user, name=name[:64],
+                                    defaults={"color": color[:7]})
+    return redirect(request.POST.get("next") or "mailbox")
 
 
 @login_required
@@ -90,13 +175,16 @@ def compose_view(request):
             subject = original.subject
             if not subject.lower().startswith("re:"):
                 subject = f"Re: {subject}"
+            sig = f"\n\n-- \n{request.user.signature}" if request.user.signature else ""
             initial = {
                 "to": original.from_addr,
                 "subject": subject,
                 "in_reply_to": original.message_id,
-                "body": f"\n\nOn {original.date:%Y-%m-%d %H:%M}, "
+                "body": f"{sig}\n\nOn {original.date:%Y-%m-%d %H:%M}, "
                         f"{original.from_addr} wrote:\n{quoted}",
             }
+    elif request.user.signature:
+        initial = {"body": f"\n\n-- \n{request.user.signature}"}
 
     if request.method == "POST":
         form = ComposeForm(request.POST)
@@ -112,6 +200,19 @@ def compose_view(request):
         form = ComposeForm(initial=initial)
 
     return render(request, "mail/compose.html", {"form": form, **_sidebar(request.user)})
+
+
+@login_required
+def settings_view(request):
+    if request.method == "POST":
+        form = SettingsForm(request.POST, instance=request.user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Settings saved.")
+            return redirect("settings")
+    else:
+        form = SettingsForm(instance=request.user)
+    return render(request, "mail/settings.html", {"form": form, **_sidebar(request.user)})
 
 
 @login_required

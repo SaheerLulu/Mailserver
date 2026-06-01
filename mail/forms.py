@@ -1,5 +1,18 @@
 from django import forms
 
+from .models import Mailbox
+
+
+class SettingsForm(forms.ModelForm):
+    class Meta:
+        model = Mailbox
+        fields = ["full_name", "signature", "spam_threshold",
+                  "vacation_enabled", "vacation_subject", "vacation_message"]
+        widgets = {
+            "signature": forms.Textarea(attrs={"rows": 4}),
+            "vacation_message": forms.Textarea(attrs={"rows": 4}),
+        }
+
 
 class ComposeForm(forms.Form):
     to = forms.CharField(

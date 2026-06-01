@@ -6,7 +6,11 @@ from . import views
 urlpatterns = [
     path("", views.mailbox_view, {"folder": "INBOX"}, name="mailbox"),
     path("folder/<str:folder>/", views.mailbox_view, name="mailbox_folder"),
+    path("search/", views.search_view, name="search"),
+    path("label/<int:pk>/", views.label_view, name="label"),
+    path("labels/create/", views.label_create, name="label_create"),
     path("compose/", views.compose_view, name="compose"),
+    path("settings/", views.settings_view, name="settings"),
     path("message/<int:pk>/", views.message_view, name="message"),
     path("message/<int:pk>/action/", views.message_action, name="message_action"),
     path("message/<int:pk>/raw/", views.message_raw, name="message_raw"),

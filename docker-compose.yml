@@ -60,6 +60,18 @@ services:
       - "25:25"
       - "587:587"
 
+  queue:
+    build: .
+    image: django-mailserver
+    command: ["queue"]
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - media:/app/media
+
 volumes:
   postgres-data:
   media:

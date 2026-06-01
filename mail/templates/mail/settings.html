@@ -1,0 +1,20 @@
+{% extends "mail/base.html" %}
+{% block title %}Settings · Webmail{% endblock %}
+{% block content %}
+  <h2 style="margin-top:0;">Settings</h2>
+  <form method="post" class="panel" style="max-width:640px;">
+    {% csrf_token %}
+    {% for field in form %}
+      <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+      {{ field }}
+      {% if field.help_text %}<div style="color:var(--muted);font-size:.8rem;">{{ field.help_text }}</div>{% endif %}
+      {% if field.errors %}<div style="color:#b91c1c;font-size:.85rem;">{{ field.errors|striptags }}</div>{% endif %}
+    {% endfor %}
+    <div style="margin-top:1rem;"><button class="btn primary" type="submit">Save</button></div>
+  </form>
+
+  <p style="color:var(--muted);margin-top:1rem;">
+    Manage server-side <strong>filters</strong> and <strong>labels</strong> in the
+    {% if user.is_staff %}<a href="/admin/mail/filter/">admin</a>{% else %}admin{% endif %}.
+  </p>
+{% endblock %}

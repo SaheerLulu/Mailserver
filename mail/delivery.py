@@ -1,8 +1,8 @@
-"""Outbound mail: DKIM signing, MX lookup and SMTP relay.
+"""Outbound mail: DKIM signing, a persistent retry queue, MX lookup and relay.
 
-This is the "sending MTA" half of the server, implemented in Python. Local
-recipients are stored straight into their mailbox; remote recipients are
-delivered by connecting to their domain's MX hosts on port 25.
+Submitted/forwarded mail destined for remote domains is written to the
+``OutboundMessage`` queue and delivered by the ``runqueue`` worker, which
+retries with exponential backoff. Local recipients are delivered immediately.
 """
 import logging
 import smtplib
@@ -11,9 +11,10 @@ from email.utils import formatdate, make_msgid
 
 import dns.resolver
 from django.conf import settings
+from django.core.files.base import ContentFile
 
 from . import dkimtools
-from .models import Domain, Message
+from .models import Domain, Message, OutboundMessage
 
 log = logging.getLogger("mail")
 
@@ -29,7 +30,6 @@ def split_addresses(value: str):
 
 
 def sign_for_sender(mail_from: str, raw: bytes) -> bytes:
-    """DKIM-sign ``raw`` using the sending domain's key, if one exists."""
     domain = Domain.objects.filter(name=domain_of(mail_from)).first()
     if domain and domain.has_dkim:
         try:
@@ -38,13 +38,12 @@ def sign_for_sender(mail_from: str, raw: bytes) -> bytes:
                 domain.dkim_selector or settings.DKIM_SELECTOR,
                 domain.dkim_private_key,
             )
-        except Exception as exc:  # noqa: BLE001 - never block delivery on signing
+        except Exception as exc:  # noqa: BLE001
             log.warning("DKIM signing failed for %s: %s", domain.name, exc)
     return raw
 
 
 def mx_hosts(domain: str):
-    """Ordered list of mail exchangers for ``domain`` (falls back to the A record)."""
     try:
         answers = dns.resolver.resolve(domain, "MX")
         ranked = sorted((r.preference, str(r.exchange).rstrip(".")) for r in answers)
@@ -54,33 +53,58 @@ def mx_hosts(domain: str):
         return [domain]
 
 
-def relay(mail_from: str, rcpts, raw: bytes):
-    """Deliver ``raw`` to remote recipients, grouped and tried per MX host."""
+def _smtp_send(host: str, mail_from: str, rcpts, raw: bytes):
+    """Deliver to a single MX host. Raises on failure."""
+    with smtplib.SMTP(host, 25, timeout=30) as client:
+        client.ehlo(settings.MAIL_SERVER_HOSTNAME)
+        if client.has_extn("starttls"):
+            client.starttls()
+            client.ehlo(settings.MAIL_SERVER_HOSTNAME)
+        client.sendmail(mail_from or "", rcpts, raw)
+
+
+def attempt_delivery(mail_from: str, rcpts, raw: bytes):
+    """Try to deliver to all recipients. Returns ``(ok: bool, error: str)``."""
     by_domain = {}
     for rcpt in rcpts:
         by_domain.setdefault(domain_of(rcpt), []).append(rcpt)
 
+    errors = []
     for domain, domain_rcpts in by_domain.items():
         if not domain:
             continue
+        delivered = False
+        last_error = "no MX hosts"
         for host in mx_hosts(domain):
             try:
-                with smtplib.SMTP(host, 25, timeout=30) as client:
-                    client.ehlo(settings.MAIL_SERVER_HOSTNAME)
-                    if client.has_extn("starttls"):
-                        client.starttls()
-                        client.ehlo(settings.MAIL_SERVER_HOSTNAME)
-                    client.sendmail(mail_from or "", domain_rcpts, raw)
+                _smtp_send(host, mail_from, domain_rcpts, raw)
                 log.info("Relayed to %s via %s", domain_rcpts, host)
+                delivered = True
                 break
-            except Exception as exc:  # noqa: BLE001 - try the next MX
+            except Exception as exc:  # noqa: BLE001 - try next MX
+                last_error = f"{host}: {exc}"
                 log.warning("Relay to %s via %s failed: %s", domain, host, exc)
-        else:
-            log.error("Delivery to %s failed on all MX hosts", domain_rcpts)
+        if not delivered:
+            errors.append(f"{domain}: {last_error}")
+
+    return (not errors, "; ".join(errors))
+
+
+def enqueue(sender_mailbox, mail_from: str, rcpts, raw: bytes) -> OutboundMessage:
+    """Add a message to the outbound delivery queue."""
+    om = OutboundMessage(
+        sender_mailbox=sender_mailbox,
+        mail_from=mail_from or "",
+        recipients=", ".join(rcpts),
+    )
+    om.raw.save(f"out-{make_msgid()[1:20]}.eml", ContentFile(raw), save=False)
+    om.save()
+    log.info("Queued outbound message %s to %s", om.pk, rcpts)
+    return om
 
 
 def send_outbound(sender_mailbox, mail_from, rcpts, raw: bytes, store_sent=True):
-    """Sign, optionally file in Sent, then deliver to local + remote recipients."""
+    """Sign, file in Sent, deliver local recipients now, queue remote ones."""
     from . import storage  # lazy: avoid import cycle
 
     signed = sign_for_sender(mail_from, raw)
@@ -93,15 +117,14 @@ def send_outbound(sender_mailbox, mail_from, rcpts, raw: bytes, store_sent=True)
     for rcpt in rcpts:
         for kind, target in storage.resolve_recipients(rcpt):
             if kind == "local":
-                storage.store_to_mailbox(target, signed, Message.Folder.INBOX)
+                storage.deposit(target, signed, allow_spam=False)
             else:
                 remote.append(target)
     if remote:
-        relay(mail_from, remote, signed)
+        enqueue(sender_mailbox, mail_from, remote, signed)
 
 
 def send_from_webmail(mailbox, data: dict):
-    """Build a message from the compose form and send it."""
     to_list = split_addresses(data.get("to", ""))
     cc_list = split_addresses(data.get("cc", ""))
 
@@ -115,7 +138,33 @@ def send_from_webmail(mailbox, data: dict):
     em["Message-ID"] = make_msgid(domain=domain_of(mailbox.email))
     if data.get("in_reply_to"):
         em["In-Reply-To"] = data["in_reply_to"]
+        em["References"] = data["in_reply_to"]
     em.set_content(data.get("body", ""))
 
     send_outbound(mailbox, mailbox.email, to_list + cc_list, em.as_bytes(),
                   store_sent=True)
+
+
+def send_autoreply(mailbox, to_addr: str):
+    em = EmailMessage()
+    em["From"] = mailbox.email
+    em["To"] = to_addr
+    em["Subject"] = mailbox.vacation_subject or "Out of office"
+    em["Date"] = formatdate(localtime=True)
+    em["Message-ID"] = make_msgid(domain=domain_of(mailbox.email))
+    em["Auto-Submitted"] = "auto-replied"
+    em.set_content(mailbox.vacation_message)
+
+    signed = sign_for_sender(mailbox.email, em.as_bytes())
+    if domain_of(to_addr) and not _is_local(to_addr):
+        enqueue(mailbox, mailbox.email, [to_addr], signed)
+    else:
+        from . import storage
+        for kind, target in storage.resolve_recipients(to_addr):
+            if kind == "local":
+                storage.deposit(target, signed, allow_spam=False)
+
+
+def _is_local(address: str) -> bool:
+    from . import storage
+    return storage.is_local_domain(domain_of(address))

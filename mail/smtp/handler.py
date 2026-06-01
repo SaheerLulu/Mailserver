@@ -33,8 +33,11 @@ class MailHandler:
                     list(envelope.rcpt_tos), data,
                 )
             else:
+                peer_ip = session.peer[0] if session.peer else ""
+                helo = getattr(session, "host_name", "") or ""
                 await sync_to_async(storage.handle_inbound)(
-                    list(envelope.rcpt_tos), data,
+                    list(envelope.rcpt_tos), data, peer_ip,
+                    envelope.mail_from, helo,
                 )
         except Exception:  # noqa: BLE001
             log.exception("Error processing message")
