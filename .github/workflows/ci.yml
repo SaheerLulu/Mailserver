@@ -42,7 +42,11 @@ jobs:
       - name: System check
         run: python manage.py check
       - name: Test suite (unit + live IMAP/POP3/SMTP on Postgres)
-        run: python manage.py test -v2
+        # --keepdb skips the final DROP DATABASE. The live IMAP/POP3/SMTP tests
+        # run real servers in background threads whose DB connections can briefly
+        # outlive teardown and block the drop; on an ephemeral CI runner the test
+        # DB is discarded with the runner, so there's nothing to clean up.
+        run: python manage.py test -v2 --keepdb
 
   # ---------------------------------------------------------------------------
   # Boot the full docker-compose stack and exercise the live servers.
