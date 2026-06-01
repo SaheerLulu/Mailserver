@@ -178,6 +178,34 @@ mature suite like mailcow or Gmail:
 For a hardened, every-extension suite, use a dedicated stack. For understanding
 and owning the whole thing in Python, this goes a very long way.
 
+## Tests & CI
+
+A full test suite lives in `mail/tests/` (delivery, spam/Bayes/greylist/DNSBL,
+filters, threading, webmail, REST API, OAuth2, CalDAV/CardDAV, notifications,
+and **live IMAP/POP3/SMTP-XOAUTH2** servers driven by real `imaplib`/`poplib`/
+`smtplib` clients).
+
+```bash
+python manage.py test            # against your configured database
+```
+
+The protocol tests need a database whose commits are visible across threads, so
+they **auto-skip on SQLite** and run on **PostgreSQL**.
+
+CI (`.github/workflows/ci.yml`) runs two jobs on every push:
+- **test** — migrations-in-sync + `manage.py check` + the whole suite (incl. the
+  live protocol tests) against a Postgres service.
+- **integration** — boots the real `docker compose` stack and runs
+  `scripts/integration_test.sh`, which creates a mailbox, sends through SMTP
+  submission, and reads it back over IMAP and POP3.
+
+You can run the integration script yourself against a running stack:
+
+```bash
+docker compose up -d --build postgres web smtp imap pop3 queue
+./scripts/integration_test.sh
+```
+
 ## Local development
 
 ```bash
