@@ -1,0 +1,18 @@
+{% extends "mail/base.html" %}
+{% block title %}Compose · Webmail{% endblock %}
+{% block content %}
+  <h2 style="margin-top:0;">New message</h2>
+  <form method="post" class="panel">
+    {% csrf_token %}
+    {{ form.in_reply_to }}
+    {% for field in form.visible_fields %}
+      <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+      {{ field }}
+      {% if field.errors %}<div style="color:#b91c1c; font-size:.85rem;">{{ field.errors|striptags }}</div>{% endif %}
+    {% endfor %}
+    <div style="margin-top:1rem;">
+      <button class="btn primary" type="submit">Send</button>
+      <a class="btn" href="{% url 'mailbox' %}">Cancel</a>
+    </div>
+  </form>
+{% endblock %}

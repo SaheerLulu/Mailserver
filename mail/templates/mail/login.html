@@ -1,0 +1,18 @@
+{% extends "mail/base.html" %}
+{% block title %}Sign in · Webmail{% endblock %}
+{% block anon %}
+<div style="min-height:100vh; display:flex; align-items:center; justify-content:center;">
+  <form method="post" class="panel" style="width:340px;">
+    {% csrf_token %}
+    <h1 style="margin-top:0;">📬 Webmail</h1>
+    {% if form.errors %}
+      <ul class="messages-flash"><li class="error">Invalid email or password.</li></ul>
+    {% endif %}
+    <label for="id_username">Email</label>
+    <input type="text" name="username" id="id_username" autofocus required>
+    <label for="id_password">Password</label>
+    <input type="password" name="password" id="id_password" required>
+    <button class="btn primary" type="submit" style="margin-top:1rem; width:100%;">Sign in</button>
+  </form>
+</div>
+{% endblock %}

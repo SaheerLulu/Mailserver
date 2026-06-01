@@ -1,0 +1,44 @@
+{% extends "mail/base.html" %}
+{% block title %}{{ message.subject|default:'(no subject)' }} · Webmail{% endblock %}
+{% block content %}
+  <div class="toolbar">
+    <a class="btn" href="{% url 'mailbox_folder' folder=message.folder %}">← Back</a>
+    <a class="btn primary" href="{% url 'compose' %}?reply={{ message.pk }}">Reply</a>
+    <form class="inline" method="post" action="{% url 'message_action' pk=message.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{% url 'message' pk=message.pk %}">
+      <button class="btn" name="action" value="flag">{% if message.is_flagged %}Unflag{% else %}Flag{% endif %}</button>
+      <button class="btn" name="action" value="unread">Mark unread</button>
+      <button class="btn" name="action" value="ARCHIVE">Archive</button>
+      <button class="btn" name="action" value="trash">Trash</button>
+      {% if message.folder == 'TRASH' %}
+        <button class="btn" name="action" value="delete"
+                onclick="return confirm('Permanently delete this message?')">Delete</button>
+      {% endif %}
+    </form>
+    <a class="btn" href="{% url 'message_raw' pk=message.pk %}">View source</a>
+  </div>
+
+  <div class="panel">
+    <div class="msg-head">
+      <h1>{{ message.subject|default:'(no subject)' }}</h1>
+      <div class="msg-meta">
+        <strong>From:</strong> {{ message.from_addr }}<br>
+        <strong>To:</strong> {{ message.to_addrs }}<br>
+        {% if message.cc_addrs %}<strong>Cc:</strong> {{ message.cc_addrs }}<br>{% endif %}
+        <strong>Date:</strong> {{ message.date|date:"D, j M Y H:i" }}
+      </div>
+    </div>
+
+    {% if message.attachments.all %}
+      <div style="margin-bottom:1rem;">
+        <strong>Attachments:</strong>
+        {% for a in message.attachments.all %}
+          <a class="btn" href="{% url 'attachment' pk=a.pk %}">📎 {{ a.filename }} ({{ a.size|filesizeformat }})</a>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <div class="msg-body">{% if message.body_text %}{{ message.body_text }}{% else %}{{ message.body_html|striptags }}{% endif %}</div>
+  </div>
+{% endblock %}

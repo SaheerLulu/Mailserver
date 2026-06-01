@@ -1,0 +1,26 @@
+{% extends "mail/base.html" %}
+{% block title %}{{ folder|capfirst }} · Webmail{% endblock %}
+{% block content %}
+  <h2 style="margin-top:0;">{{ folder|capfirst }}</h2>
+  {% if message_list %}
+    <table class="mail">
+      {% for m in message_list %}
+        <tr class="{% if not m.is_read %}unread{% endif %}">
+          <td class="from">
+            {% if folder == 'SENT' %}{{ m.to_addrs|default:'(no recipient)' }}
+            {% else %}{{ m.from_addr|default:'(unknown sender)' }}{% endif %}
+          </td>
+          <td>
+            <a href="{% url 'message' pk=m.pk %}">
+              {% if m.is_flagged %}⭐ {% endif %}{{ m.subject|default:'(no subject)' }}
+            </a>
+            <div style="color:var(--muted); font-weight:400; font-size:.85rem;">{{ m.preview }}</div>
+          </td>
+          <td class="date">{{ m.date|date:"M j, H:i" }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="panel empty">This folder is empty.</div>
+  {% endif %}
+{% endblock %}

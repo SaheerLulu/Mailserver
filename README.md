@@ -1,118 +1,127 @@
-# Self-hosted mail server
+# Django mail server
 
-A complete, from-scratch mail server you run yourself with Docker Compose.
-It assembles the proven open-source mail stack — **Postfix**, **Dovecot** and
-**Rspamd** — into a single `docker compose up`, with virtual domains, mailboxes
-and aliases stored in **PostgreSQL**.
+A self-hosted mail server written **from scratch in Django/Python** — no
+Postfix, no Dovecot. The SMTP service, message storage, DKIM signing, outbound
+delivery and a webmail UI are all implemented as a Django project.
 
-No turnkey black box: every config file is in this repo, commented, and yours
-to read and change.
+It's deliberately small and readable: a great way to *understand* how mail
+actually works, and a usable mail server for a personal domain.
 
-## What's inside
-
-| Component  | Role                                                              |
-|------------|-------------------------------------------------------------------|
-| **Postfix**| MTA — receives mail on :25, authenticated submission on :587/:465 |
-| **Dovecot**| IMAP (:993/:143), LMTP delivery, SASL auth, Sieve filtering       |
-| **Rspamd** | Spam scoring **and** DKIM signing, via the milter protocol        |
-| **PostgreSQL** | Source of truth for domains, mailboxes and aliases            |
-| **Redis**  | Backing store for Rspamd (Bayes, rate limits, greylisting)        |
+## Architecture
 
 ```
-                        ┌──────────────────────────────────────────┐
-   inbound :25  ───────▶│ Postfix ──milter──▶ Rspamd ──▶ Redis      │
-   submit :587/:465 ───▶│   │  ▲                (spam + DKIM)        │
-                        │   │  └── SASL auth ──┐                     │
-                        │   ▼ LMTP :24         │                     │
-                        │ Dovecot ◀── IMAP :993│── PostgreSQL ◀──────┘
-                        │   (maildir on disk)  (users / aliases)     │
-   IMAP :993 ◀──────────│──────────────────────────────────────────┘
+                 ┌──────────────────── Django project ─────────────────────┐
+   :25  inbound ─┤ aiosmtpd handler ─▶ storage ─▶ PostgreSQL (Message rows) │
+                 │     (MailHandler)        │            + media/*.eml       │
+   :587 submit ──┤ aiosmtpd + AUTH ─▶ delivery ─┬─ local  ─▶ storage          │
+                 │                              └─ remote ─▶ MX lookup +      │
+                 │                                            SMTP relay :25  │
+                 │ DKIM signing (dkimpy) on outbound ─────────────────────────│
+   :8000 web ────┤ Gunicorn ─▶ webmail views + Django admin                  │
+                 └──────────────────────────────────────────────────────────┘
 ```
+
+| Piece | Where | What it does |
+|-------|-------|--------------|
+| **SMTP server** | `mail/smtp/handler.py` + `runsmtp` command | `aiosmtpd`-based; accepts inbound mail for local domains, and authenticated submission |
+| **Storage** | `mail/storage.py` | recipient resolution (mailboxes, aliases, catch-all), auth, persisting messages |
+| **Delivery** | `mail/delivery.py` | DKIM signing, MX lookup (`dnspython`), SMTP relay (`smtplib`) |
+| **DKIM** | `mail/dkimtools.py` | RSA keygen (`cryptography`) + signing (`dkimpy`) |
+| **Parsing** | `mail/parsing.py` | RFC 5322 → stored headers/body/attachments |
+| **Webmail + admin** | `mail/views.py`, `mail/templates/`, `mail/admin.py` | read/compose/folders + full Django admin |
+| **Data model** | `mail/models.py` | `Domain`, `Mailbox` (the auth user), `Alias`, `Message`, `Attachment` |
+
+PostgreSQL stores everything; raw `.eml` files and attachments live on the
+`media` volume.
 
 ## Features
 
-- Virtual domains / mailboxes / aliases (incl. catch-all) in PostgreSQL
-- Authenticated submission only over TLS; senders restricted to addresses they own
-- Inbound spam filtering with automatic filing into **Junk** via Sieve
-- Per-domain **DKIM** signing; helper generates the key and the DNS record
-- Per-mailbox quotas
-- TLS via Let's Encrypt (or self-signed for testing)
-- One-command management through a `Makefile`
+- Inbound MTA on port 25 (accepts mail only for known local recipients)
+- Authenticated submission on port 587 (SMTP AUTH, optional STARTTLS)
+- Outbound delivery to the internet via MX lookup + SMTP relay
+- Per-domain **DKIM** signing with a key generator that prints the DNS record
+- Virtual domains, mailboxes, aliases and `@domain` catch-alls
+- Webmail: login, folders (Inbox/Sent/Drafts/Junk/Archive/Trash), read,
+  compose, reply, attachments, flag, view source
+- Django admin for managing everything
+- Per-mailbox quota field; CLI + admin account management
 
 ## Quick start
 
 ```bash
-cp .env.example .env          # then edit: MAIL_DOMAIN, MAIL_HOSTNAME, POSTGRES_PASSWORD
-make tls-letsencrypt          # or: make tls-self-signed  (for testing)
-make build && make up
+cp .env.example .env          # set DJANGO_SECRET_KEY, MAIL_HOSTNAME, POSTGRES_PASSWORD, hosts
+docker compose up -d --build
 
-make add-domain DOMAIN=example.com
-make add-user   EMAIL=you@example.com
-make dkim       DOMAIN=example.com        # prints the DKIM DNS record
-make reload
+# create an admin (also a real mailbox you can log into webmail with)
+docker compose run --rm web python manage.py createsuperuser
+
+# add another mailbox, and a DKIM key for the domain
+docker compose run --rm web python manage.py createmailbox you@example.com
+docker compose run --rm web python manage.py gendkim example.com
 ```
 
-Then publish your DNS records (see below) and point a mail client at
-`mail.example.com` (IMAP 993 / SMTP 587). The full walkthrough is in
-[docs/SETUP.md](docs/SETUP.md).
+- Webmail + admin: `http://your-host:8000/` (admin at `/admin/`)
+- Then publish your DNS records (see [docs/DNS.md](docs/DNS.md)) and point SMTP
+  clients at port 587.
 
-## ⚠️ This is the easy part
+Full walkthrough: [docs/SETUP.md](docs/SETUP.md).
 
-The software runs in minutes; **deliverability is the real work** and lives
-entirely in DNS and your IP's reputation. You must get all of these right:
+## Management commands
 
-- **PTR (reverse DNS)** matching `MAIL_HOSTNAME` — set at your VPS provider
-- **MX**, **SPF**, **DKIM**, **DMARC** records
-- An IP/provider that **allows outbound port 25** (many block it by default)
-
-[docs/DNS.md](docs/DNS.md) has every record with copy-paste examples. Test the
-result at [mail-tester.com](https://www.mail-tester.com).
-
-## Managing the server
-
-| Command | Does |
-|---------|------|
-| `make up` / `make down` | start / stop the stack |
-| `make ps` / `make logs` | status / tail logs |
-| `make reload` | reload config without downtime |
-| `make add-domain DOMAIN=…` | register a domain |
-| `make add-user EMAIL=… [QUOTA=mb]` | create/update a mailbox |
-| `make del-user EMAIL=…` | remove a mailbox |
-| `make add-alias SRC=… DST=…` | forward an address (catch-all: `SRC=@domain`) |
-| `make dkim DOMAIN=…` | generate a DKIM key + DNS record |
-| `make list` | list domains, mailboxes, aliases |
-
-Run `make help` for the full list.
-
-## Repository layout
-
-```
-docker-compose.yml      service orchestration
-.env.example            configuration template
-Makefile                management commands
-db/init/                PostgreSQL schema (auto-loaded on first run)
-postfix/                Postfix image, config and PostgreSQL lookup maps
-dovecot/                Dovecot image, config and SQL queries
-rspamd/                 Rspamd config (spam + DKIM)
-scripts/                domain/user/alias/DKIM/TLS helpers
-certs/                  TLS cert + key (git-ignored)
-dkim/                   DKIM keys + DNS records (private keys git-ignored)
-docs/                   SETUP, DNS and TROUBLESHOOTING guides
+```bash
+docker compose run --rm web python manage.py createsuperuser            # admin + mailbox
+docker compose run --rm web python manage.py createmailbox a@b.com       # mailbox (+ --quota-mb)
+docker compose run --rm web python manage.py gendkim example.com         # DKIM key + DNS record
+docker compose run --rm web python manage.py runsmtp                     # (the smtp service runs this)
 ```
 
-## Documentation
+Domains, mailboxes and aliases are also fully manageable in the Django admin.
 
-- [docs/SETUP.md](docs/SETUP.md) — full deployment walkthrough
-- [docs/DNS.md](docs/DNS.md) — every DNS record explained
-- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — when things misbehave
+## ⚠️ Scope & honest caveats
 
-## Security notes
+This implements a working SMTP MTA + webmail in Python. It is excellent for
+learning and for a low-volume personal domain, but it is **not** as
+battle-hardened as Postfix/Dovecot. Notably:
 
-- Set a strong `POSTGRES_PASSWORD` and a Rspamd controller password before
-  going live.
-- The Rspamd UI is bound to `127.0.0.1` only — reach it via SSH tunnel.
-- Private keys (`certs/*.pem`, `dkim/*.key`) and `.env` are git-ignored; keep
-  them backed up but never commit them.
+- **No IMAP/POP3** — mail is read through the webmail UI (or the admin).
+- Outbound delivery is best-effort (tries MX hosts in order); there is no
+  persistent retry queue, so transient remote failures are logged, not retried.
+- No greylisting/RBL/Bayesian spam filtering. Inbound is accepted for valid
+  local recipients; add filtering if you need it.
+- **Deliverability still depends on DNS + IP reputation**: correct **PTR**,
+  **SPF**, **DKIM**, **DMARC**, and a provider that allows **outbound port 25**.
+  See [docs/DNS.md](docs/DNS.md).
+
+For a hardened, full-protocol stack, use a dedicated MTA/MDA. For understanding
+and owning the whole thing in Python, this is for you.
+
+## Local development
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+# point at a local postgres (or sqlite) via env vars, then:
+python manage.py migrate
+python manage.py runserver        # webmail/admin
+python manage.py runsmtp          # SMTP listeners (use high ports if non-root)
+```
+
+## Layout
+
+```
+config/            Django project (settings, urls, wsgi/asgi)
+mail/              the mail server app
+  models.py        Domain / Mailbox / Alias / Message / Attachment
+  parsing.py       message parsing
+  storage.py       routing, auth, persistence
+  delivery.py      DKIM signing, MX lookup, SMTP relay
+  dkimtools.py     DKIM keygen + signing
+  smtp/handler.py  aiosmtpd handler + authenticator
+  management/commands/   runsmtp, gendkim, createmailbox
+  views.py, urls.py, forms.py, admin.py, templates/
+docs/              SETUP and DNS guides
+Dockerfile, docker-compose.yml, entrypoint.sh, requirements.txt
+```
 
 ## License
 

@@ -1,11 +1,8 @@
-# TLS certificates
+# TLS certificates (optional)
 
-This directory is mounted read-only into the postfix and dovecot containers at
-`/etc/ssl/mail`. Two files are expected:
+Mounted read-only into the `smtp` container at `/app/certs`. To enable STARTTLS
+on the SMTP ports, place a certificate + key here and point `SMTP_TLS_CERT` /
+`SMTP_TLS_KEY` in `.env` at them (e.g. `/app/certs/fullchain.pem`).
 
-- `fullchain.pem` — server certificate + intermediate chain
-- `privkey.pem`   — matching private key
-
-Generate them with `scripts/setup-tls.sh` (or `make tls-self-signed` /
-`make tls-letsencrypt`). The `.pem`/`.key` files are git-ignored — never commit
-private keys.
+`.pem` / `.key` files are git-ignored — never commit private keys. See
+`docs/SETUP.md` for obtaining a certificate with certbot.

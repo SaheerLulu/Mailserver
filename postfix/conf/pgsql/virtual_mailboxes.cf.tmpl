@@ -1,6 +1,0 @@
-# Does this exact mailbox exist and is it enabled? (virtual_mailbox_maps)
-hosts = ${POSTGRES_HOST}
-dbname = ${POSTGRES_DB}
-user = ${POSTGRES_USER}
-password = ${POSTGRES_PASSWORD}
-query = SELECT 1 FROM virtual_users WHERE email='%s' AND enabled=TRUE

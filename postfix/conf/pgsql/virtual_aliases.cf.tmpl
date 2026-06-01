@@ -1,7 +1,0 @@
-# Forward an address to one or more destinations. (virtual_alias_maps)
-# Supports catch-all of the form "@domain.tld".
-hosts = ${POSTGRES_HOST}
-dbname = ${POSTGRES_DB}
-user = ${POSTGRES_USER}
-password = ${POSTGRES_PASSWORD}
-query = SELECT destination FROM virtual_aliases WHERE source='%s'
