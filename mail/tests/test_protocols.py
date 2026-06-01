@@ -129,13 +129,18 @@ class SmtpXoauth2Tests(TransactionTestCase):
             s.quit()
         finally:
             # The XOAUTH2 validation opened a DB connection in the controller's
-            # event-loop thread; close it so the test DB can be dropped.
+            # event-loop thread; close it (waiting deterministically) so the
+            # test DB can be dropped without a lingering session.
+            import threading
+            done = threading.Event()
+
             def _close():
                 from django.db import connections
                 connections.close_all()
+                done.set()
             try:
                 ctrl.loop.call_soon_threadsafe(_close)
-                time.sleep(0.3)
+                done.wait(5)
             except Exception:  # noqa: BLE001
                 pass
             ctrl.stop()

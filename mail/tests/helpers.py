@@ -55,17 +55,24 @@ class ThreadedServer:
 
     def __exit__(self, *exc):
         if self._loop:
-            # Close any DB connections opened in the server's worker threads so
-            # the test database can be dropped cleanly.
-            try:
+            # Close DB connections opened in the server's threads (both the
+            # event-loop thread and the thread-sensitive executor thread) so
+            # the test database can be dropped without a lingering session.
+            done = threading.Event()
+
+            async def _close():
                 from asgiref.sync import sync_to_async
+                from django.db import connections
+                connections.close_all()                      # loop thread
+                await sync_to_async(connections.close_all)()  # executor thread
+                done.set()
 
-                async def _close():
-                    from django.db import connections
-                    await sync_to_async(connections.close_all)()
-
-                asyncio.run_coroutine_threadsafe(_close(), self._loop).result(5)
+            try:
+                asyncio.run_coroutine_threadsafe(_close(), self._loop)
+                done.wait(5)
             except Exception:  # noqa: BLE001
                 pass
             self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread:
+            self._thread.join(timeout=5)
         return False
