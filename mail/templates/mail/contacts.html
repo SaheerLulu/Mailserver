@@ -1,0 +1,37 @@
+{% extends "mail/base.html" %}
+{% block title %}Contacts · Webmail{% endblock %}
+{% block content %}
+  <h2 style="margin-top:0;">Contacts</h2>
+
+  <form method="post" class="panel" style="max-width:640px; margin-bottom:1rem;">
+    {% csrf_token %}
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:.5rem;">
+      <div><label>Name</label><input type="text" name="name"></div>
+      <div><label>Email</label><input type="text" name="email" required></div>
+      <div><label>Organization</label><input type="text" name="organization"></div>
+      <div><label>Phone</label><input type="text" name="phone"></div>
+    </div>
+    <div style="margin-top:.8rem;"><button class="btn primary" type="submit">Add contact</button></div>
+  </form>
+
+  {% if contacts %}
+    <table class="mail">
+      {% for c in contacts %}
+        <tr>
+          <td>{{ c.name|default:'—' }}</td>
+          <td><a href="{% url 'compose' %}">{{ c.email }}</a></td>
+          <td>{{ c.organization }}</td>
+          <td>{{ c.phone }}</td>
+          <td class="date">
+            <form method="post" class="inline">{% csrf_token %}
+              <button class="btn" name="delete" value="{{ c.pk }}"
+                      onclick="return confirm('Delete this contact?')">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="panel empty">No contacts yet.</div>
+  {% endif %}
+{% endblock %}

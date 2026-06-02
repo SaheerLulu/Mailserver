@@ -1,0 +1,32 @@
+{% extends "mail/base.html" %}
+{% block title %}{{ heading }} · Webmail{% endblock %}
+{% block content %}
+  <h2 style="margin-top:0;">{{ heading }}</h2>
+  {% if threads %}
+    <table class="mail">
+      {% for t in threads %}
+        <tr class="{% if t.unread %}unread{% endif %}">
+          <td class="from">
+            {% if t.msg.folder == 'SENT' %}{{ t.msg.to_addrs|default:'(no recipient)' }}
+            {% else %}{{ t.msg.from_addr|default:'(unknown sender)' }}{% endif %}
+          </td>
+          <td>
+            <a href="{% url 'message' pk=t.msg.pk %}">
+              {% if t.msg.is_flagged %}⭐ {% endif %}
+              {{ t.msg.subject|default:'(no subject)' }}
+              {% if t.count > 1 %}<span class="count">{{ t.count }}</span>{% endif %}
+            </a>
+            {% for l in t.msg.labels.all %}
+              <span style="background:{{ l.color }};color:#fff;border-radius:4px;padding:0 .4rem;font-size:.7rem;font-weight:600;">{{ l.name }}</span>
+            {% endfor %}
+            {% if t.msg.is_spam %}<span style="color:#b91c1c;font-size:.7rem;">SPAM {{ t.msg.spam_score }}</span>{% endif %}
+            <div style="color:var(--muted); font-weight:400; font-size:.85rem;">{{ t.msg.preview }}</div>
+          </td>
+          <td class="date">{{ t.msg.date|date:"M j, H:i" }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="panel empty">{% if is_search %}No matching messages.{% else %}This folder is empty.{% endif %}</div>
+  {% endif %}
+{% endblock %}

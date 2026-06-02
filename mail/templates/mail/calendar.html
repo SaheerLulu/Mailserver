@@ -1,0 +1,51 @@
+{% extends "mail/base.html" %}
+{% block title %}Calendar · Webmail{% endblock %}
+{% block content %}
+  <h2 style="margin-top:0;">Calendar</h2>
+  <p style="color:var(--muted);">
+    Sync to any CalDAV client (Apple Calendar, Thunderbird, DAVx⁵) at:
+    <code>{{ request.scheme }}://{{ request.get_host }}{{ caldav_url }}</code>
+  </p>
+
+  <form method="post" class="panel" style="max-width:680px; margin-bottom:1rem;">
+    {% csrf_token %}
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:.5rem;">
+      <div style="grid-column:1/3;"><label>Title</label><input type="text" name="summary" required></div>
+      <div><label>Start</label><input type="datetime-local" name="dtstart" required></div>
+      <div><label>End</label><input type="datetime-local" name="dtend"></div>
+      <div><label>Location</label><input type="text" name="location"></div>
+      <div><label><input type="checkbox" name="all_day"> All day</label></div>
+      <div style="grid-column:1/3;"><label>Notes</label><textarea name="description" rows="2"></textarea></div>
+    </div>
+    <div style="margin-top:.8rem;"><button class="btn primary" type="submit">Add event</button></div>
+  </form>
+
+  <h3>Upcoming</h3>
+  {% if upcoming %}
+    <table class="mail">
+      {% for e in upcoming %}
+        <tr>
+          <td class="from">{{ e.dtstart|date:"M j, H:i" }}</td>
+          <td><strong>{{ e.summary }}</strong>
+            {% if e.location %}<span style="color:var(--muted);"> · {{ e.location }}</span>{% endif %}
+            <div style="color:var(--muted);font-size:.85rem;">{{ e.description }}</div></td>
+          <td class="date">
+            <form method="post" class="inline">{% csrf_token %}
+              <button class="btn" name="delete" value="{{ e.pk }}">Delete</button>
+            </form></td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="panel empty">No upcoming events.</div>
+  {% endif %}
+
+  {% if past %}
+    <h3 style="margin-top:1rem;">Past</h3>
+    <table class="mail">
+      {% for e in past %}
+        <tr><td class="from">{{ e.dtstart|date:"M j, H:i" }}</td><td>{{ e.summary }}</td><td></td></tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+{% endblock %}

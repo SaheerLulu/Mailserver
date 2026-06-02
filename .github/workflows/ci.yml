@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Unit + integration tests (incl. live IMAP/POP3/SMTP) against PostgreSQL.
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mailserver
+          POSTGRES_USER: mailuser
+          POSTGRES_PASSWORD: testpass
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mailuser -d mailserver"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DJANGO_SECRET_KEY: ci-secret-key
+      DJANGO_DEBUG: "false"
+      POSTGRES_DB: mailserver
+      POSTGRES_USER: mailuser
+      POSTGRES_PASSWORD: testpass
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Migrations are in sync
+        run: python manage.py makemigrations --check --dry-run
+      - name: System check
+        run: python manage.py check
+      - name: Test suite (unit + live IMAP/POP3/SMTP on Postgres)
+        # --keepdb skips the final DROP DATABASE. The live IMAP/POP3/SMTP tests
+        # run real servers in background threads whose DB connections can briefly
+        # outlive teardown and block the drop; on an ephemeral CI runner the test
+        # DB is discarded with the runner, so there's nothing to clean up.
+        run: python manage.py test -v2 --keepdb
+
+  # ---------------------------------------------------------------------------
+  # Boot the full docker-compose stack and exercise the live servers.
+  # ---------------------------------------------------------------------------
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare .env
+        run: |
+          cp .env.example .env
+          sed -i "s|^DJANGO_SECRET_KEY=.*|DJANGO_SECRET_KEY=ci-secret-key|" .env
+          sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=ci-pass|" .env
+          sed -i "s|^DJANGO_ALLOWED_HOSTS=.*|DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1|" .env
+          sed -i "s|^CLAMAV_HOST=.*|CLAMAV_HOST=|" .env
+      - name: Boot the stack
+        run: docker compose up -d --build postgres web smtp imap pop3 queue
+      - name: Run integration test
+        run: ./scripts/integration_test.sh
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color | tail -300
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
