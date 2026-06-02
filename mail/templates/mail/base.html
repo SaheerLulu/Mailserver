@@ -75,6 +75,10 @@
           {% if f.unread %}<span class="count">{{ f.unread }}</span>{% endif %}
         </a>
       {% endfor %}
+      <a class="folder" href="{% url 'snoozed' %}"><span>💤 Snoozed</span>
+        {% if snoozed_count %}<span class="count">{{ snoozed_count }}</span>{% endif %}</a>
+      <a class="folder" href="{% url 'scheduled' %}"><span>🕒 Scheduled</span>
+        {% if scheduled_count %}<span class="count">{{ scheduled_count }}</span>{% endif %}</a>
       {% if label_list %}
         <div style="margin:.8rem .4rem .3rem; color:var(--muted); font-size:.75rem; text-transform:uppercase;">Labels</div>
         {% for l in label_list %}
@@ -128,6 +132,25 @@
       headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}' },
       body: JSON.stringify(sub) });
   } catch (e) { /* push is best-effort */ }
+})();
+
+// Gmail-style keyboard shortcuts: c=compose, /=search, g i=inbox, g t=sent.
+(function () {
+  var chord = null;
+  document.addEventListener('keydown', function (e) {
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (chord === 'g') {
+      chord = null;
+      if (e.key === 'i') location.href = '/';
+      else if (e.key === 't') location.href = '/folder/SENT/';
+      else if (e.key === 's') location.href = '/folder/JUNK/';
+      return;
+    }
+    if (e.key === 'c') location.href = '{% url "compose" %}';
+    else if (e.key === '/') { e.preventDefault(); var s = document.querySelector('header input[name=q]'); if (s) s.focus(); }
+    else if (e.key === 'g') chord = 'g';
+  });
 })();
 </script>
 {% endif %}

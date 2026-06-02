@@ -100,11 +100,13 @@ def resolve_thread_id(mailbox, parsed: dict) -> str:
 # --- Persisting -------------------------------------------------------------
 def store_to_mailbox(mailbox, raw: bytes, folder=Message.Folder.INBOX,
                      parsed=None, mark_read=False, spam_score=0.0,
-                     is_spam=False, star=False, label_names=None) -> Message:
+                     is_spam=False, star=False, label_names=None,
+                     category=Message.Category.PRIMARY) -> Message:
     parsed = parsed or parsing.parse_message(raw)
     msg = Message(
         mailbox=mailbox,
         folder=folder,
+        category=category,
         message_id=parsed["message_id"][:998],
         in_reply_to=parsed["in_reply_to"][:998],
         references=parsed.get("references", ""),
@@ -152,10 +154,14 @@ def deposit(mailbox, raw: bytes, parsed=None, spam_score=0.0, allow_spam=True,
         is_spam = True
     folder = Message.Folder.JUNK if is_spam else decision["folder"]
 
+    from . import categorize as _cat
+    category = _cat.categorize(parsed)
+
     return store_to_mailbox(
         mailbox, raw, folder=folder, parsed=parsed,
         mark_read=decision["mark_read"], star=decision["star"],
         spam_score=spam_score, is_spam=is_spam, label_names=decision["labels"],
+        category=category,
     )
 
 

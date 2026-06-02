@@ -1,32 +1,67 @@
 {% extends "mail/base.html" %}
 {% block title %}{{ heading }} · Webmail{% endblock %}
 {% block content %}
-  <h2 style="margin-top:0;">{{ heading }}</h2>
-  {% if threads %}
-    <table class="mail">
-      {% for t in threads %}
-        <tr class="{% if t.unread %}unread{% endif %}">
-          <td class="from">
-            {% if t.msg.folder == 'SENT' %}{{ t.msg.to_addrs|default:'(no recipient)' }}
-            {% else %}{{ t.msg.from_addr|default:'(unknown sender)' }}{% endif %}
-          </td>
-          <td>
-            <a href="{% url 'message' pk=t.msg.pk %}">
-              {% if t.msg.is_flagged %}⭐ {% endif %}
-              {{ t.msg.subject|default:'(no subject)' }}
-              {% if t.count > 1 %}<span class="count">{{ t.count }}</span>{% endif %}
-            </a>
-            {% for l in t.msg.labels.all %}
-              <span style="background:{{ l.color }};color:#fff;border-radius:4px;padding:0 .4rem;font-size:.7rem;font-weight:600;">{{ l.name }}</span>
-            {% endfor %}
-            {% if t.msg.is_spam %}<span style="color:#b91c1c;font-size:.7rem;">SPAM {{ t.msg.spam_score }}</span>{% endif %}
-            <div style="color:var(--muted); font-weight:400; font-size:.85rem;">{{ t.msg.preview }}</div>
-          </td>
-          <td class="date">{{ t.msg.date|date:"M j, H:i" }}</td>
-        </tr>
+  <div style="display:flex; align-items:center; justify-content:space-between;">
+    <h2 style="margin:0;">{{ heading }}</h2>
+    {% if folder %}
+      <form method="post" action="{% url 'mark_all_read' folder=folder %}" class="inline">
+        {% csrf_token %}<button class="btn">Mark all read</button>
+      </form>
+    {% endif %}
+  </div>
+
+  {% if tabs %}
+    <div style="display:flex; gap:.25rem; margin:.6rem 0; border-bottom:1px solid var(--line);">
+      {% for t in tabs %}
+        <a href="?category={{ t.name }}"
+           style="padding:.5rem .9rem; {% if t.name == current_category %}border-bottom:2px solid var(--accent); font-weight:600;{% else %}color:var(--muted);{% endif %}">
+          {{ t.label }}{% if t.unread %} <span class="count">{{ t.unread }}</span>{% endif %}
+        </a>
       {% endfor %}
-    </table>
+    </div>
+  {% endif %}
+
+  {% if threads %}
+    <form method="post" action="{% url 'bulk_action' %}" id="bulkform">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ request.get_full_path }}">
+      {% if selectable %}
+        <div class="toolbar" style="margin:.5rem 0;">
+          <label class="btn"><input type="checkbox" onclick="document.querySelectorAll('.rowcb').forEach(c=>c.checked=this.checked)"> All</label>
+          <button class="btn" name="action" value="read">Read</button>
+          <button class="btn" name="action" value="archive">Archive</button>
+          <button class="btn" name="action" value="trash">Trash</button>
+          <button class="btn" name="action" value="spam">Spam</button>
+          <button class="btn" name="action" value="important">Important</button>
+        </div>
+      {% endif %}
+      <table class="mail">
+        {% for t in threads %}
+          <tr class="{% if t.unread %}unread{% endif %}">
+            {% if selectable %}<td style="width:1.5rem;"><input class="rowcb" type="checkbox" name="ids" value="{{ t.msg.pk }}"></td>{% endif %}
+            <td style="width:2.2rem;">
+              {% if t.msg.is_flagged %}⭐{% endif %}{% if t.msg.is_important %}❗{% endif %}
+            </td>
+            <td class="from">
+              {% if t.msg.folder == 'SENT' or t.msg.folder == 'DRAFTS' %}{{ t.msg.to_addrs|default:'(no recipient)' }}
+              {% else %}{{ t.msg.from_addr|default:'(unknown sender)' }}{% endif %}
+            </td>
+            <td>
+              {% if t.msg.folder == 'DRAFTS' %}
+                <a href="{% url 'compose' %}?draft={{ t.msg.pk }}"><em>[Draft]</em> {{ t.msg.subject|default:'(no subject)' }}</a>
+              {% else %}
+                <a href="{% url 'message' pk=t.msg.pk %}">{{ t.msg.subject|default:'(no subject)' }}</a>
+              {% endif %}
+              {% if t.count > 1 %}<span class="count">{{ t.count }}</span>{% endif %}
+              {% for l in t.msg.labels.all %}<span style="background:{{ l.color }};color:#fff;border-radius:4px;padding:0 .4rem;font-size:.7rem;">{{ l.name }}</span>{% endfor %}
+              <div style="color:var(--muted); font-weight:400; font-size:.85rem;">{{ t.msg.preview }}</div>
+            </td>
+            <td class="date">{{ t.msg.date|date:"M j, H:i" }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    </form>
   {% else %}
-    <div class="panel empty">{% if is_search %}No matching messages.{% else %}This folder is empty.{% endif %}</div>
+    <div class="panel empty">{% if is_search %}No matching messages.{% else %}Nothing here.{% endif %}</div>
   {% endif %}
 {% endblock %}

@@ -4,11 +4,15 @@
   <div class="toolbar">
     <a class="btn" href="{% url 'mailbox_folder' folder=message.folder %}">← Back</a>
     <a class="btn primary" href="{% url 'compose' %}?reply={{ message.pk }}">Reply</a>
+    <a class="btn" href="{% url 'compose' %}?replyall={{ message.pk }}">Reply all</a>
+    <a class="btn" href="{% url 'compose' %}?forward={{ message.pk }}">Forward</a>
     <form class="inline" method="post" action="{% url 'message_action' pk=message.pk %}">
       {% csrf_token %}
       <input type="hidden" name="next" value="{% url 'message' pk=message.pk %}">
-      <button class="btn" name="action" value="flag">{% if message.is_flagged %}Unflag{% else %}Flag{% endif %}</button>
+      <button class="btn" name="action" value="flag">{% if message.is_flagged %}Unstar{% else %}Star{% endif %}</button>
+      <button class="btn" name="action" value="important">{% if message.is_important %}Unmark important{% else %}Important{% endif %}</button>
       <button class="btn" name="action" value="unread">Mark unread</button>
+      <button class="btn" name="action" value="{% if message.is_muted %}unmute{% else %}mute{% endif %}">{% if message.is_muted %}Unmute{% else %}Mute{% endif %}</button>
       <button class="btn" name="action" value="ARCHIVE">Archive</button>
       {% if message.is_spam or message.folder == 'JUNK' %}
         <button class="btn" name="action" value="notspam">Not spam</button>
@@ -20,6 +24,12 @@
         <button class="btn" name="action" value="delete"
                 onclick="return confirm('Permanently delete this message?')">Delete</button>
       {% endif %}
+    </form>
+    <form class="inline" method="post" action="{% url 'message_action' pk=message.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{% url 'message' pk=message.pk %}">
+      <input type="hidden" name="action" value="snooze">
+      <input type="datetime-local" name="until" class="btn" onchange="this.form.submit()" title="Snooze until">
     </form>
     {% if all_labels %}
       <form class="inline" method="post" action="{% url 'message_action' pk=message.pk %}">
