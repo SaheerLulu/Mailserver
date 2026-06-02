@@ -8,7 +8,7 @@ from django.db import connection, transaction
 from django.utils import timezone
 
 from mail import delivery
-from mail.models import OutboundMessage
+from mail.models import Message, OutboundMessage
 
 
 def backoff_seconds(attempts: int) -> int:
@@ -34,11 +34,42 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("Outbound queue worker started"))
 
         while not stop.is_set():
+            self._unsnooze()
             processed = self._drain(options["batch"])
             if options["once"]:
                 break
             if processed == 0:
                 stop.wait(options["poll"])
+
+    def _unsnooze(self) -> int:
+        """Return snoozed messages whose time has come back to the inbox."""
+        now = timezone.now()
+        due = Message.objects.filter(snooze_until__lte=now)
+        count = due.count()
+        if count:
+            due.update(snooze_until=None, is_read=False, folder=Message.Folder.INBOX)
+            self.stdout.write(f"un-snoozed {count} message(s)")
+        return count
+
+    def _finalize_scheduled(self, om, raw):
+        """First send of a scheduled/undo message: Sent copy + local + relay."""
+        from mail import storage
+        if om.sender_mailbox_id:
+            storage.store_to_mailbox(om.sender_mailbox, raw, Message.Folder.SENT,
+                                     mark_read=True)
+        remote = []
+        for rcpt in om.recipient_list:
+            for kind, target in storage.resolve_recipients(rcpt):
+                if kind == "local":
+                    storage.deposit(target, raw, allow_spam=False)
+                else:
+                    remote.append(target)
+        # Future retries only relay the remaining remote recipients.
+        om.scheduled = False
+        om.recipients = ", ".join(remote)
+        if not remote:
+            return True, ""
+        return delivery.attempt_delivery(om.mail_from, remote, raw)
 
     def _drain(self, batch: int) -> int:
         now = timezone.now()
@@ -66,7 +97,10 @@ class Command(BaseCommand):
                 om.save(update_fields=["status", "last_error", "updated_at"])
                 continue
 
-            ok, error = delivery.attempt_delivery(om.mail_from, om.recipient_list, raw)
+            if om.scheduled:
+                ok, error = self._finalize_scheduled(om, raw)
+            else:
+                ok, error = delivery.attempt_delivery(om.mail_from, om.recipient_list, raw)
             om.attempts += 1
             if ok:
                 om.status = OutboundMessage.Status.SENT

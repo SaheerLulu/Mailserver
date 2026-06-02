@@ -2,17 +2,58 @@
 {% block title %}Compose · Webmail{% endblock %}
 {% block content %}
   <h2 style="margin-top:0;">New message</h2>
-  <form method="post" class="panel">
+  <form method="post" class="panel" id="composeform">
     {% csrf_token %}
-    {{ form.in_reply_to }}
-    {% for field in form.visible_fields %}
-      <label for="{{ field.id_for_label }}">{{ field.label }}</label>
-      {{ field }}
-      {% if field.errors %}<div style="color:#b91c1c; font-size:.85rem;">{{ field.errors|striptags }}</div>{% endif %}
-    {% endfor %}
-    <div style="margin-top:1rem;">
-      <button class="btn primary" type="submit">Send</button>
+    {{ form.in_reply_to }}{{ form.references }}{{ form.draft_id }}{{ form.body_html }}
+    <input type="hidden" name="send_at" id="id_send_at">
+    <input type="hidden" name="intent" id="id_intent" value="send">
+
+    <label for="{{ form.to.id_for_label }}">To</label>
+    <input type="text" name="to" id="{{ form.to.id_for_label }}" list="contactlist"
+           value="{{ form.to.value|default:'' }}" autocomplete="off">
+    <datalist id="contactlist"></datalist>
+    {% if form.to.errors %}<div style="color:#b91c1c;font-size:.85rem;">{{ form.to.errors|striptags }}</div>{% endif %}
+
+    <label for="{{ form.cc.id_for_label }}">Cc</label>
+    <input type="text" name="cc" id="{{ form.cc.id_for_label }}" value="{{ form.cc.value|default:'' }}">
+
+    <label for="{{ form.subject.id_for_label }}">Subject</label>
+    <input type="text" name="subject" id="{{ form.subject.id_for_label }}" value="{{ form.subject.value|default:'' }}">
+
+    <label for="{{ form.body.id_for_label }}">Message</label>
+    <textarea name="body" id="{{ form.body.id_for_label }}" rows="14">{{ form.body.value|default:'' }}</textarea>
+
+    <div style="margin-top:1rem; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
+      <button class="btn primary" type="submit" onclick="document.getElementById('id_intent').value='send'">Send</button>
+      <button class="btn" type="submit" onclick="document.getElementById('id_intent').value='draft'">Save draft</button>
+      <label class="btn">Schedule:
+        <input type="datetime-local" id="sched"
+               onchange="document.getElementById('id_send_at').value=this.value; document.getElementById('id_intent').value='schedule'; document.getElementById('composeform').submit();">
+      </label>
       <a class="btn" href="{% url 'mailbox' %}">Cancel</a>
     </div>
   </form>
+
+  <script>
+  // Recipient autocomplete from the address book.
+  (function () {
+    var input = document.getElementById('{{ form.to.id_for_label }}');
+    var list = document.getElementById('contactlist');
+    if (!input) return;
+    input.addEventListener('input', async function () {
+      var term = input.value.split(',').pop().trim();
+      if (term.length < 2) return;
+      try {
+        var r = await fetch('{% url "autocomplete" %}?q=' + encodeURIComponent(term));
+        var data = await r.json();
+        list.innerHTML = '';
+        data.results.forEach(function (c) {
+          var o = document.createElement('option');
+          o.value = c.email; o.label = c.name || c.email;
+          list.appendChild(o);
+        });
+      } catch (e) {}
+    });
+  })();
+  </script>
 {% endblock %}

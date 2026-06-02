@@ -1,0 +1,23 @@
+{% extends "mail/base.html" %}
+{% block title %}Scheduled · Webmail{% endblock %}
+{% block content %}
+  <h2 style="margin-top:0;">{{ heading }}</h2>
+  {% if scheduled %}
+    <table class="mail">
+      {% for om in scheduled %}
+        <tr>
+          <td class="from">{{ om.recipients }}</td>
+          <td>Scheduled send</td>
+          <td class="date">{{ om.next_attempt|date:"M j, H:i" }}</td>
+          <td style="width:6rem;">
+            <form method="post" action="{% url 'cancel_scheduled' pk=om.pk %}" class="inline">
+              {% csrf_token %}<button class="btn">Cancel</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="panel empty">No scheduled messages.</div>
+  {% endif %}
+{% endblock %}

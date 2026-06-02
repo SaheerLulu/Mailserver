@@ -90,17 +90,33 @@ def attempt_delivery(mail_from: str, rcpts, raw: bytes):
     return (not errors, "; ".join(errors))
 
 
-def enqueue(sender_mailbox, mail_from: str, rcpts, raw: bytes) -> OutboundMessage:
-    """Add a message to the outbound delivery queue."""
+def enqueue(sender_mailbox, mail_from: str, rcpts, raw: bytes,
+            send_at=None, scheduled=False) -> OutboundMessage:
+    """Add a message to the outbound delivery queue.
+
+    ``send_at`` delays the first attempt (scheduled send / undo-send hold);
+    ``scheduled`` marks rows the worker must *finalize* (Sent copy + local
+    delivery + relay) rather than just relay.
+    """
+    from django.utils import timezone
     om = OutboundMessage(
         sender_mailbox=sender_mailbox,
         mail_from=mail_from or "",
         recipients=", ".join(rcpts),
+        next_attempt=send_at or timezone.now(),
+        scheduled=scheduled,
     )
     om.raw.save(f"out-{make_msgid()[1:20]}.eml", ContentFile(raw), save=False)
     om.save()
-    log.info("Queued outbound message %s to %s", om.pk, rcpts)
+    log.info("Queued outbound message %s to %s (send_at=%s)", om.pk, rcpts, send_at)
     return om
+
+
+def schedule_send(mailbox, mail_from, rcpts, raw: bytes, send_at, scheduled=True):
+    """Sign and queue a message for delivery at ``send_at`` (whole-message)."""
+    signed = sign_for_sender(mail_from, raw)
+    return enqueue(mailbox, mail_from, list(rcpts), signed,
+                   send_at=send_at, scheduled=scheduled)
 
 
 def send_outbound(sender_mailbox, mail_from, rcpts, raw: bytes, store_sent=True):
@@ -124,7 +140,8 @@ def send_outbound(sender_mailbox, mail_from, rcpts, raw: bytes, store_sent=True)
         enqueue(sender_mailbox, mail_from, remote, signed)
 
 
-def send_from_webmail(mailbox, data: dict):
+def build_message(mailbox, data: dict) -> bytes:
+    """Build an RFC 5322 message (text, optionally with an HTML alternative)."""
     to_list = split_addresses(data.get("to", ""))
     cc_list = split_addresses(data.get("cc", ""))
 
@@ -138,11 +155,43 @@ def send_from_webmail(mailbox, data: dict):
     em["Message-ID"] = make_msgid(domain=domain_of(mailbox.email))
     if data.get("in_reply_to"):
         em["In-Reply-To"] = data["in_reply_to"]
-        em["References"] = data["in_reply_to"]
+        em["References"] = data.get("references") or data["in_reply_to"]
     em.set_content(data.get("body", ""))
+    if data.get("body_html"):
+        em.add_alternative(data["body_html"], subtype="html")
+    return em.as_bytes()
 
-    send_outbound(mailbox, mailbox.email, to_list + cc_list, em.as_bytes(),
-                  store_sent=True)
+
+def send_from_webmail(mailbox, data: dict):
+    """Send now, schedule for later, or hold for an undo window.
+
+    Returns the OutboundMessage when the send was deferred (scheduled/undo) so
+    the caller can offer a cancel/undo action, else None.
+    """
+    to_list = split_addresses(data.get("to", ""))
+    cc_list = split_addresses(data.get("cc", ""))
+    rcpts = to_list + cc_list
+    raw = build_message(mailbox, data)
+
+    send_at = data.get("send_at")            # datetime or ISO string → scheduled
+    if isinstance(send_at, str):
+        from datetime import datetime
+        from django.utils import timezone
+        try:
+            dt = datetime.fromisoformat(send_at)
+            send_at = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+        except ValueError:
+            send_at = None
+    if not send_at and data.get("undo_seconds"):
+        from datetime import timedelta
+        from django.utils import timezone
+        send_at = timezone.now() + timedelta(seconds=int(data["undo_seconds"]))
+
+    if send_at:
+        return schedule_send(mailbox, mailbox.email, rcpts, raw, send_at)
+
+    send_outbound(mailbox, mailbox.email, rcpts, raw, store_sent=True)
+    return None
 
 
 def send_autoreply(mailbox, to_addr: str):

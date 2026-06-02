@@ -178,6 +178,16 @@ class Message(models.Model):
     folder = models.CharField(max_length=16, choices=Folder.choices, default=Folder.INBOX)
     labels = models.ManyToManyField(Label, blank=True, related_name="messages")
 
+    class Category(models.TextChoices):
+        PRIMARY = "PRIMARY", "Primary"
+        SOCIAL = "SOCIAL", "Social"
+        PROMOTIONS = "PROMOTIONS", "Promotions"
+        UPDATES = "UPDATES", "Updates"
+        FORUMS = "FORUMS", "Forums"
+
+    category = models.CharField(max_length=12, choices=Category.choices,
+                                default=Category.PRIMARY, db_index=True)
+
     message_id = models.CharField(max_length=998, blank=True, db_index=True)
     in_reply_to = models.CharField(max_length=998, blank=True)
     references = models.TextField(blank=True)
@@ -197,10 +207,16 @@ class Message(models.Model):
 
     spam_score = models.FloatField(default=0.0)
     is_spam = models.BooleanField(default=False)
-    is_read = models.BooleanField(default=False)       # IMAP \Seen
-    is_flagged = models.BooleanField(default=False)     # IMAP \Flagged
+    is_read = models.BooleanField(default=False)       # IMAP \Seen / Gmail read
+    is_flagged = models.BooleanField(default=False)     # IMAP \Flagged / Gmail star
     is_answered = models.BooleanField(default=False)    # IMAP \Answered
     imap_deleted = models.BooleanField(default=False)   # IMAP \Deleted (pending expunge)
+
+    # Gmail-style state.
+    is_important = models.BooleanField(default=False)
+    is_muted = models.BooleanField(default=False)
+    snooze_until = models.DateTimeField(null=True, blank=True, db_index=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -208,6 +224,7 @@ class Message(models.Model):
         indexes = [
             models.Index(fields=["mailbox", "folder", "-date"]),
             models.Index(fields=["mailbox", "thread_id"]),
+            models.Index(fields=["mailbox", "folder", "category", "-date"]),
         ]
 
     def __str__(self):
@@ -250,7 +267,11 @@ class OutboundMessage(models.Model):
     attempts = models.PositiveIntegerField(default=0)
     max_attempts = models.PositiveIntegerField(default=10)
     last_error = models.TextField(blank=True)
+    # Earliest time to attempt delivery — also used for scheduled send and the
+    # "undo send" hold window.
     next_attempt = models.DateTimeField(default=timezone.now, db_index=True)
+    # True for user-scheduled / undo-hold messages (vs. retry backoff).
+    scheduled = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

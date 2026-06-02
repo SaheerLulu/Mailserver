@@ -62,6 +62,20 @@ PostgreSQL stores everything; raw `.eml` files and attachments live on the
 - **Vacation auto-responder** (loop-safe) and per-mailbox **signatures**
 - **Contacts / address book**
 
+**Gmail-style features**
+- **Search operators**: `from:` `to:` `subject:` `label:` `in:` `category:`
+  `is:unread|read|starred|important|muted` `has:attachment` `before:`/`after:`
+- **Inbox categories/tabs**: Primary / Social / Promotions / Updates / Forums
+  (auto-classified on arrival)
+- **Drafts** (save / continue / send), **reply-all** & **forward**
+- **Scheduled send**, **undo send** (hold window), and **snooze** (with a worker
+  that returns mail to the inbox when due)
+- **Bulk actions** (select many → read/archive/trash/spam/important),
+  **mark all as read**
+- **Star**, **mark important**, **mute conversation**
+- **HTML compose**, **recipient autocomplete**, **keyboard shortcuts**
+  (`c` compose, `/` search, `g i` inbox, `g t` sent)
+
 **Sync & calendaring**
 - **CardDAV** contacts sync and **CalDAV** calendar sync (Apple/Thunderbird/DAVx⁵)
 - Built-in **calendar** in the webmail (events + ICS)
@@ -174,6 +188,10 @@ mature suite like mailcow or Gmail:
 - **Deliverability still depends on DNS + IP reputation**: correct **PTR**,
   **SPF**, **DKIM**, **DMARC**, and a provider that allows **outbound port 25**.
   See [docs/DNS.md](docs/DNS.md).
+- **Not Gmail-the-product**: the *mail* feature set is broad (search operators,
+  categories, drafts, scheduled/undo send, snooze, labels, etc.), but there's no
+  Drive/Meet/Chat/Spaces, no ML **Smart Compose/Smart Reply**, no priority-inbox
+  learning, and the webmail is a clean server-rendered UI rather than Gmail's SPA.
 
 For a hardened, every-extension suite, use a dedicated stack. For understanding
 and owning the whole thing in Python, this goes a very long way.
